@@ -1,7 +1,9 @@
 import streamlit as st
 import os
 import json
+import time
 import hashlib
+import base64
 from datetime import datetime
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain.chat_models import init_chat_model
@@ -332,11 +334,30 @@ def show_chat_interface():
         st.divider()
         
         # Info
-        st.info("💡 **Tip:** Your conversations are automatically saved and synced across sessions!")
+        #st.info("💡 **Tip:** Your conversations are automatically saved and synced across sessions!")
     
     # Main Chat Area
-    st.title("🎴 DeckChat")
-    st.caption("Powered by Advanced AI • All chats saved securely")
+    #st.title("🎴 DeckChat")
+    #st.caption("Your daily companion")
+    gif_path = "neon_star_animated.gif" 
+
+
+    with open(gif_path, "rb") as f:
+        data_url = base64.b64encode(f.read()).decode("utf-8")
+
+    col1, col2 = st.columns([1, 12], vertical_alignment="center")
+
+    with col1:
+        st.markdown(
+            f"""
+            <img src="data:image/gif;base64,{data_url}"
+            style="width: 34px; height: 34px; object-fit: contain;"/>
+            """,
+            unsafe_allow_html=True
+        )
+    with col2:
+        st.title("DeckChat")
+    st.caption("Your daily companion")
     
     # Display messages
     for msg in st.session_state.messages:
