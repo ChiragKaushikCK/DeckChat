@@ -1,3 +1,5 @@
+# app.py - DeckChat with Firebase & Perplexity AI
+
 import streamlit as st
 import os
 import json
@@ -8,7 +10,6 @@ from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain.chat_models import init_chat_model
 import firebase_admin
 from firebase_admin import credentials, firestore
-from streamlit_mic_recorder import mic_recorder
 
 # ----------------------
 # Page Configuration
@@ -23,58 +24,16 @@ st.set_page_config(
 # Custom CSS for better UI
 st.markdown("""
 <style>
-    /* Fixed header */
-    .fixed-header {
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        background: linear-gradient(135deg, rgba(102, 126, 234, 0.95) 0%, rgba(118, 75, 162, 0.95) 100%);
-        backdrop-filter: blur(10px);
-        z-index: 999;
-        padding: 15px 20px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-        display: flex;
-        align-items: center;
-        gap: 15px;
-    }
-    
-    .fixed-header img {
-        width: 35px;
-        height: 35px;
-        object-fit: contain;
-    }
-    
-    .fixed-header h1 {
-        margin: 0;
-        color: white;
-        font-size: 24px;
-        font-weight: 600;
-    }
-    
-    .fixed-header p {
-        margin: 0;
-        color: rgba(255,255,255,0.8);
-        font-size: 12px;
-    }
-    
-    /* Main content padding to account for fixed header */
-    .main-content {
-        padding-top: 80px;
-    }
-    
     .stChatMessage {
         padding: 1rem;
         border-radius: 15px;
         margin-bottom: 10px;
         animation: fadeIn 0.3s ease-in;
     }
-    
     @keyframes fadeIn {
         from { opacity: 0; transform: translateY(10px); }
         to { opacity: 1; transform: translateY(0); }
     }
-    
     .user-info {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 15px;
@@ -83,67 +42,16 @@ st.markdown("""
         margin-bottom: 20px;
         text-align: center;
     }
-    
     .stat-box {
         background: rgba(255,255,255,0.1);
         padding: 10px;
         border-radius: 8px;
         margin: 5px 0;
     }
-    
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    
     .stTextInput > div > div > input {
         border-radius: 10px;
-    }
-    
-    /* Voice button styling */
-    .voice-container {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 10px;
-    }
-    
-    .voice-btn {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        border-radius: 50%;
-        width: 50px;
-        height: 50px;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 24px;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.2);
-    }
-    
-    .voice-btn:hover {
-        transform: scale(1.1);
-        box-shadow: 0 6px 12px rgba(0,0,0,0.3);
-    }
-    
-    .voice-btn.recording {
-        animation: pulse 1.5s infinite;
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-    }
-    
-    @keyframes pulse {
-        0%, 100% { transform: scale(1); }
-        50% { transform: scale(1.1); }
-    }
-    
-    /* GIF styling for auth page */
-    .auth-gif {
-        width: 50px;
-        height: 50px;
-        object-fit: contain;
-        display: block;
-        margin: 0 auto 20px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -321,13 +229,15 @@ CRITICAL RULES:
 5. Use markdown formatting for better readability when appropriate."""
 
 # ----------------------
-# Helper Functions
+# Helper: Load GIF as Base64
 # ----------------------
-def load_gif_as_base64(gif_path):
+@st.cache_data
+def load_gif_base64(gif_path="neon_star_animated.gif"):
     """Load GIF and convert to base64"""
     try:
         with open(gif_path, "rb") as f:
-            return base64.b64encode(f.read()).decode("utf-8")
+            data = base64.b64encode(f.read()).decode("utf-8")
+        return f"data:image/gif;base64,{data}"
     except:
         return None
 
@@ -336,25 +246,24 @@ def load_gif_as_base64(gif_path):
 # ----------------------
 def show_auth_screen():
     """Display login/signup interface"""
-    gif_path = "neon_star_animated.gif"
-    gif_data = load_gif_as_base64(gif_path)
-    
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        # Animated GIF at top
-        if gif_data:
-            st.markdown(
-                f"""
-                <img src="data:image/gif;base64,{gif_data}" class="auth-gif"/>
-                """,
-                unsafe_allow_html=True
-            )
-        
-        st.markdown("<h1 style='text-align: center; color: #667eea;'>DeckChat AI</h1>", 
-                   unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: #888;'>Your Intelligent Conversation Partner</p>", 
-                   unsafe_allow_html=True)
+        # Animated header with GIF
+        gif_url = load_gif_base64()
+        if gif_url:
+            st.markdown(f"""
+            <div style='text-align: center; margin-bottom: 20px;'>
+                <img src="{gif_url}" style="width: 60px; height: 60px; object-fit: contain; margin-bottom: 10px;"/>
+                <h1 style='color: #667eea; margin: 0;'>DeckChat AI</h1>
+                <p style='color: #888; margin-top: 5px;'>Your Intelligent Conversation Partner</p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("<h1 style='text-align: center; color: #667eea;'>✦ DeckChat AI</h1>", 
+                       unsafe_allow_html=True)
+            st.markdown("<p style='text-align: center; color: #888;'>Your Intelligent Conversation Partner</p>", 
+                       unsafe_allow_html=True)
         
         tab1, tab2 = st.tabs(["🔐 Login", "📝 Sign Up"])
         
@@ -403,25 +312,6 @@ def show_auth_screen():
 def show_chat_interface():
     """Display main chat interface"""
     
-    # Load GIF
-    gif_path = "neon_star_animated.gif"
-    gif_data = load_gif_as_base64(gif_path)
-    
-    # Fixed Header
-    if gif_data:
-        st.markdown(
-            f"""
-            <div class="fixed-header">
-                <img src="data:image/gif;base64,{gif_data}" alt="DeckChat"/>
-                <div>
-                    <h1>DeckChat</h1>
-                    <p>Your daily companion</p>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    
     # Initialize model
     if 'model' not in st.session_state:
         with st.spinner("🚀 Initializing DeckChat..."):
@@ -434,19 +324,8 @@ def show_chat_interface():
     
     # Sidebar
     with st.sidebar:
-        # User Info with GIF
+        # User Info
         stats = get_user_stats(st.session_state.user_email)
-        
-        if gif_data:
-            st.markdown(
-                f"""
-                <div style="text-align: center; margin-bottom: 15px;">
-                    <img src="data:image/gif;base64,{gif_data}" style="width: 40px; height: 40px;"/>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-        
         st.markdown(f"""
         <div class='user-info'>
             <h3>👤 {st.session_state.user_email.split('@')[0]}</h3>
@@ -484,39 +363,36 @@ def show_chat_interface():
         st.divider()
         
         # Info
-        st.info("💡 Use the microphone button to chat with voice!")
+        st.info("💡 **Tip:** Your conversations are automatically saved and synced across sessions!")
     
-    # Main content with padding for fixed header
-    st.markdown('<div class="main-content">', unsafe_allow_html=True)
+    # Main Chat Area
+    gif_url = load_gif_base64()
+    
+    if gif_url:
+        # Animated header with GIF
+        col1, col2 = st.columns([1, 12], vertical_alignment="center")
+        with col1:
+            st.markdown(
+                f"""
+                <img src="{gif_url}" 
+                style="width: 39px; height: 39px; object-fit: contain;"/>
+                """,
+                unsafe_allow_html=True
+            )
+        with col2:
+            st.title("DeckChat")
+    else:
+        st.title("✦ DeckChat")
+    
+    st.caption("Your daily companion")
     
     # Display messages
     for msg in st.session_state.messages:
         with st.chat_message(msg['role']):
             st.markdown(msg['content'])
     
-    # Voice Input Section
-    st.markdown("---")
-    col1, col2 = st.columns([1, 10])
-    
-    with col1:
-        st.markdown("### 🎤")
-    
-    with col2:
-        audio = mic_recorder(
-            start_prompt="🎙️ Start Recording",
-            stop_prompt="⏹️ Stop Recording",
-            just_once=False,
-            use_container_width=True,
-            key='recorder'
-        )
-    
-    # Process voice input
-    if audio:
-        st.audio(audio['bytes'])
-        st.info("🎧 Voice message received! (Note: Transcription requires additional setup with speech-to-text API)")
-    
     # Chat Input
-    if prompt := st.chat_input("Type your message or use voice..."):
+    if prompt := st.chat_input("Ask me anything..."):
         # Check if model is ready
         if not st.session_state.model:
             st.error("⚠️ Model not initialized. Please refresh the page.")
@@ -565,8 +441,6 @@ def show_chat_interface():
                 error_msg = f"❌ Error: {str(e)}"
                 message_placeholder.error(error_msg)
                 st.error("Please try again or refresh the page.")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
 
 # ----------------------
 # Main App
