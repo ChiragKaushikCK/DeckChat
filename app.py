@@ -1,7 +1,8 @@
+# app.py - DeckChat with Firebase & Perplexity AI
+
 import streamlit as st
 import os
 import json
-import time
 import hashlib
 import base64
 from datetime import datetime
@@ -15,10 +16,23 @@ from firebase_admin import credentials, firestore
 # ----------------------
 st.set_page_config(
     page_title="DeckChat AI",
-    page_icon="🎴",
+    page_icon="✦",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# ----------------------
+# Helper Function for GIF
+# ----------------------
+def get_gif_html(size="40px"):
+    """Generate HTML for animated GIF"""
+    try:
+        gif_path = "neon_star_animated.gif"
+        with open(gif_path, "rb") as f:
+            data_url = base64.b64encode(f.read()).decode("utf-8")
+        return f'<img src="data:image/gif;base64,{data_url}" style="width: {size}; height: {size}; object-fit: contain; vertical-align: middle;"/>'
+    except:
+        return "✦"  # Fallback if GIF not found
 
 # Custom CSS for better UI
 st.markdown("""
@@ -146,18 +160,22 @@ def get_chat_history(user_email, limit=50):
         return []
     
     try:
+        # Fetch messages and sort in-memory (no index required)
         docs = db.collection('messages')\
                  .where('user_email', '==', user_email)\
-                 .order_by('timestamp', direction=firestore.Query.DESCENDING)\
-                 .limit(limit)\
                  .stream()
         
         messages = [{'role': d.to_dict()['role'], 
                     'content': d.to_dict()['content'],
-                    'timestamp': d.to_dict()['timestamp']} 
+                    'timestamp': d.to_dict().get('timestamp')} 
                    for d in docs]
         
-        return list(reversed(messages))  # Oldest first
+        # Sort by timestamp in Python (oldest first)
+        messages.sort(key=lambda x: x['timestamp'] if x['timestamp'] else datetime.min)
+        
+        # Return last N messages
+        return messages[-limit:] if len(messages) > limit else messages
+        
     except Exception as e:
         st.warning(f"History Error: {e}")
         return []
@@ -231,8 +249,13 @@ def show_auth_screen():
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        st.markdown("<h1 style='text-align: center; color: #667eea;'>🎴 DeckChat AI</h1>", 
-                   unsafe_allow_html=True)
+        # Animated title with GIF
+        st.markdown(f"""
+        <div style='text-align: center;'>
+            {get_gif_html("50px")}
+            <h1 style='display: inline; color: #667eea; margin-left: 10px;'>DeckChat AI</h1>
+        </div>
+        """, unsafe_allow_html=True)
         st.markdown("<p style='text-align: center; color: #888;'>Your Intelligent Conversation Partner</p>", 
                    unsafe_allow_html=True)
         
@@ -334,35 +357,26 @@ def show_chat_interface():
         st.divider()
         
         # Info
-        #st.info("💡 **Tip:** Your conversations are automatically saved and synced across sessions!")
+        st.info("💡 **Tip:** Your conversations are automatically saved and synced across sessions!")
     
     # Main Chat Area
-    #st.title("🎴 DeckChat")
-    #st.caption("Your daily companion")
-    gif_path = "neon_star_animated.gif" 
-
-
-    with open(gif_path, "rb") as f:
-        data_url = base64.b64encode(f.read()).decode("utf-8")
-
-    col1, col2 = st.columns([1, 12], vertical_alignment="center")
-
-    with col1:
-        st.markdown(
-            f"""
-            <img src="data:image/gif;base64,{data_url}"
-            style="width: 34px; height: 34px; object-fit: contain;"/>
-            """,
-            unsafe_allow_html=True
-        )
-    with col2:
-        st.title("DeckChat")
+    st.markdown(f"""
+    <div style='display: flex; align-items: center; margin-bottom: 10px;'>
+        {get_gif_html("39px")}
+        <h1 style='margin: 0 0 0 15px; display: inline;'>DeckChat</h1>
+    </div>
+    """, unsafe_allow_html=True)
     st.caption("Your daily companion")
     
     # Display messages
     for msg in st.session_state.messages:
-        with st.chat_message(msg['role']):
-            st.markdown(msg['content'])
+        if msg['role'] == 'user':
+            with st.chat_message("user"):
+                st.markdown(msg['content'])
+        else:
+            with st.chat_message("assistant"):
+                # Add GIF before assistant message
+                st.markdown(f"{get_gif_html('20px')} {msg['content']}", unsafe_allow_html=True)
     
     # Chat Input
     if prompt := st.chat_input("Ask me anything..."):
@@ -398,13 +412,16 @@ def show_chat_interface():
             full_response = ""
             
             try:
+                # Show animated GIF while thinking
+                message_placeholder.markdown(f"{get_gif_html('20px')} Thinking...", unsafe_allow_html=True)
+                
                 # Stream response
                 for chunk in st.session_state.model.stream(messages_for_model):
                     full_response += chunk.content
-                    message_placeholder.markdown(full_response + "▌")
+                    message_placeholder.markdown(f"{get_gif_html('20px')} {full_response}▌", unsafe_allow_html=True)
                 
-                # Final response
-                message_placeholder.markdown(full_response)
+                # Final response with GIF
+                message_placeholder.markdown(f"{get_gif_html('20px')} {full_response}", unsafe_allow_html=True)
                 
                 # Save to session and database
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
