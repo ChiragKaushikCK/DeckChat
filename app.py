@@ -15,7 +15,7 @@ from firebase_admin import credentials, firestore
 # Page Configuration
 # ----------------------
 st.set_page_config(
-    page_title="DeckChat AI",
+    page_title="DeckChat",
     page_icon="✦",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -35,7 +35,7 @@ st.markdown("""
         to { opacity: 1; transform: translateY(0); }
     }
     .user-info {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(120deg, #a6c0fe 0%, #f68084 100%);
         padding: 15px;
         border-radius: 10px;
         color: white;
@@ -255,7 +255,7 @@ def show_auth_screen():
             st.markdown(f"""
             <div style='text-align: center; margin-bottom: 20px;'>
                 <img src="{gif_url}" style="width: 60px; height: 60px; object-fit: contain; margin-bottom: 10px;"/>
-                <h1 style='color: #667eea; margin: 0;'>DeckChat AI</h1>
+                <h1 style='color: #667eea; margin: 0;'>DeckChat</h1>
                 <p style='color: #888; margin-top: 5px;'>Your Intelligent Conversation Partner</p>
             </div>
             """, unsafe_allow_html=True)
@@ -279,7 +279,7 @@ def show_auth_screen():
                             st.session_state.authenticated = True
                             st.session_state.user_email = email
                             st.session_state.messages = []
-                            st.success("✅ Login successful!")
+                            st.success("✔ Login successful!")
                             st.rerun()
                         else:
                             st.error("❌ Invalid credentials")
@@ -298,7 +298,7 @@ def show_auth_screen():
                         if new_password == confirm_password:
                             result = sign_up(new_email, new_password)
                             if result == "success":
-                                st.success("✅ Account created! Please login.")
+                                st.success("✔ Account created! Please login.")
                             else:
                                 st.error(f"❌ {result}")
                         else:
@@ -345,7 +345,7 @@ def show_chat_interface():
         
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("🔄 Refresh", use_container_width=True):
+            if st.button("🗘 Refresh", use_container_width=True):
                 st.session_state.messages = get_chat_history(st.session_state.user_email)
                 st.rerun()
         
@@ -363,7 +363,7 @@ def show_chat_interface():
         st.divider()
         
         # Info
-        st.info("💡 **Tip:** Your conversations are automatically saved and synced across sessions!")
+        st.info("💡 **Feedback:** send your feedback to : theconsciouschirag@gmail.com")
     
     # Main Chat Area
     gif_url = load_gif_base64()
@@ -441,6 +441,24 @@ def show_chat_interface():
                 error_msg = f"❌ Error: {str(e)}"
                 message_placeholder.error(error_msg)
                 st.error("Please try again or refresh the page.")
+        # footer Area
+        gif_url = load_gif_base64()
+    
+        if gif_url:
+            # Animated footer with GIF
+            col1, col2 = st.columns([1, 12], vertical_alignment="center")
+            with col1:
+                st.markdown(
+                    f"""
+                    <img src="{gif_url}" 
+                    style="width: 39px; height: 39px; object-fit: contain;"/>
+                    """,
+                    unsafe_allow_html=True
+                )
+            with col2:
+                st.title("DeckChat")
+        else:
+            st.title("✦ DeckChat")
 
 # ----------------------
 # Main App
