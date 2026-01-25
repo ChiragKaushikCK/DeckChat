@@ -441,24 +441,24 @@ def show_chat_interface():
                 error_msg = f"❌ Error: {str(e)}"
                 message_placeholder.error(error_msg)
                 st.error("Please try again or refresh the page.")
-        # footer Area
+         # Footer Area
         gif_url = load_gif_base64()
-    
+        
         if gif_url:
             # Animated footer with GIF
-            col1, col2 = st.columns([1, 12], vertical_alignment="center")
+            col1, col2 = st.columns([1, 20], vertical_alignment="center")
             with col1:
                 st.markdown(
                     f"""
                     <img src="{gif_url}" 
-                    style="width: 39px; height: 39px; object-fit: contain;"/>
+                    style="width: 24px; height: 24px; object-fit: contain;"/>
                     """,
                     unsafe_allow_html=True
                 )
             with col2:
-                st.title("DeckChat")
+                st.caption("Built with DeckChat AI • All chats saved securely")
         else:
-            st.title("✦ DeckChat")
+            st.caption("✦ Built with DeckChat AI • All chats saved securely")
 
 # ----------------------
 # Main App
