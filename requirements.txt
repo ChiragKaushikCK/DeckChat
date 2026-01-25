@@ -8,4 +8,3 @@ firebase-admin
 requests
 pydantic
 pydantic-core
-streamlit-mic-recorder
