@@ -1,504 +1,115 @@
-# app.py - DeckChat with Firebase &GPT-3.5-Turbo
-
 import streamlit as st
 import os
-import json
-import hashlib
-import base64
-from datetime import datetime
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-from langchain_openai import ChatOpenAI
-import firebase_admin
-from firebase_admin import credentials, firestore
+import tempfile
 from dotenv import load_dotenv
 
+from langchain_community.document_loaders import PyMuPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_groq import ChatGroq
+from langchain_community.vectorstores import FAISS
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
+
+# -----------------------------
+# Page Config & Styles
+# -----------------------------
+st.set_page_config(page_title="DocTalk Groq", page_icon="⚡", layout="centered")
 load_dotenv()
 
-# ----------------------
-# Page Configuration
-# ----------------------
-st.set_page_config(
-    page_title="DeckChat",
-    page_icon="✦",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# Get your free key from https://console.groq.com/
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
 
-# Custom CSS for Modern Glassmorphism UI
 st.markdown("""
 <style>
-    .stChatMessage {
-        padding: 1.2rem;
-        border-radius: 15px;
-        margin-bottom: 15px;
-        animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        background: rgba(255, 255, 255, 0.02);
-    }
-    @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(15px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-    .user-info {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 15px;
-        border-radius: 12px;
-        color: white;
-        margin-bottom: 20px;
-        text-align: center;
-        box-shadow: 0 4px 15px rgba(118, 75, 162, 0.3);
-    }
-    .stat-box {
-        background: rgba(255,255,255,0.15);
-        padding: 10px;
-        border-radius: 8px;
-        margin: 8px 0;
-        backdrop-filter: blur(5px);
-    }
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    .stTextInput > div > div > input {
-        border-radius: 10px;
-        border: 1px solid #ddd;
-    }
+    .stChatMessage {border-radius: 12px; padding: 15px; border: 1px solid rgba(255,255,255,0.1);}
+    .animated-text {animation: fadeIn 1.2s ease-in;}
+    @keyframes fadeIn {from {opacity: 0;} to {opacity: 1;}}
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------------
-# Firebase Setup
-# ----------------------
-@st.cache_resource
-def init_firebase():
-    """Initialize Firebase connection"""
-    try:
-        if not firebase_admin._apps:
-            if 'FIREBASE_CONFIG' in st.secrets:
-                cred_dict = json.loads(st.secrets['FIREBASE_CONFIG'])
-                cred = credentials.Certificate(cred_dict)
-                firebase_admin.initialize_app(cred)
-            else:
-                st.error("⚠️ Firebase configuration not found in secrets")
-                return None
-        return firestore.client()
-    except Exception as e:
-        st.error(f"Firebase Error: {e}")
-        return None
+# -----------------------------
+# Local Search Engine (HuggingFace)
+# -----------------------------
+@st.cache_resource(show_spinner=False)
+def build_engine(file_bytes):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(file_bytes)
+        temp_path = tmp.name
 
-db = init_firebase()
+    loader = PyMuPDFLoader(temp_path)
+    docs = loader.load()
 
-# ----------------------
-# Authentication Functions
-# ----------------------
-def hash_password(password):
-    """Hash password for secure storage"""
-    return hashlib.sha256(password.encode()).hexdigest()
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    chunks = splitter.split_documents(docs)
 
-def sign_up(email, password):
-    """Create new user account"""
-    if not db:
-        return "Database connection error"
-    
-    users_ref = db.collection('users')
-    
-    # Check if user exists
-    existing = list(users_ref.where('email', '==', email).stream())
-    if existing:
-        return "User already exists"
-    
-    # Create new user
-    users_ref.add({
-        'email': email,
-        'password_hash': hash_password(password),
-        'created_at': datetime.utcnow().isoformat(),
-        'total_messages': 0
-    })
-    return "success"
+    # Local & Free Embeddings (No API calls used for this)
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-def sign_in(email, password):
-    """Authenticate user"""
-    if not db:
-        return False
-    
-    users_ref = db.collection('users')
-    docs = list(users_ref.where('email', '==', email)
-                .where('password_hash', '==', hash_password(password)).stream())
-    return True if docs else False
+    vector_db = FAISS.from_documents(chunks, embeddings)
+    os.remove(temp_path)
+    return vector_db, chunks
 
-# ----------------------
-# Database Functions
-# ----------------------
-def save_message(user_email, role, content):
-    """Save message to Firebase"""
-    if db:
-        try:
-            db.collection('messages').add({
-                'user_email': user_email,
-                'role': role,
-                'content': content,
-                'timestamp': datetime.utcnow()
-            })
-            
-            # Update user message count
-            users_ref = db.collection('users')
-            user_docs = list(users_ref.where('email', '==', user_email).stream())
-            if user_docs:
-                user_doc = user_docs[0]
-                user_ref = users_ref.document(user_doc.id)
-                current_count = user_doc.to_dict().get('total_messages', 0)
-                user_ref.update({'total_messages': current_count + 1})
-        except Exception as e:
-            st.warning(f"Save Error: {e}")
+# -----------------------------
+# Main Application UI
+# -----------------------------
+st.markdown("<h1 class='animated-text'>⚡ DocTalk: Groq Powered</h1>", unsafe_allow_html=True)
 
-def get_chat_history(user_email, limit=50):
-    """Get user's chat history"""
-    if not db:
-        return []
-    
-    try:
-        # Fetch messages and sort in-memory (no index required)
-        docs = db.collection('messages')\
-                 .where('user_email', '==', user_email)\
-                 .stream()
-        
-        messages = [{'role': d.to_dict()['role'], 
-                    'content': d.to_dict()['content'],
-                    'timestamp': d.to_dict().get('timestamp')} 
-                   for d in docs]
-        
-        # Sort by timestamp in Python (oldest first)
-        messages.sort(key=lambda x: x['timestamp'] if x['timestamp'] else datetime.min)
-        
-        # Return last N messages
-        return messages[-limit:] if len(messages) > limit else messages
-        
-    except Exception as e:
-        st.warning(f"History Error: {e}")
-        return []
+with st.sidebar:
+    st.title("Settings")
+    uploaded_file = st.file_uploader("Upload PDF", type=["pdf"], label_visibility="collapsed")
+    if not GROQ_API_KEY:
+        st.error("Missing GROQ_API_KEY in .env or Secrets!")
 
-def get_user_stats(user_email):
-    """Get user statistics"""
-    if not db:
-        return {'total_messages': 0, 'created_at': 'Unknown'}
+if uploaded_file and GROQ_API_KEY:
+    file_bytes = uploaded_file.read()
     
-    try:
-        users_ref = db.collection('users')
-        user_docs = list(users_ref.where('email', '==', user_email).stream())
-        if user_docs:
-            data = user_docs[0].to_dict()
-            return {
-                'total_messages': data.get('total_messages', 0),
-                'created_at': data.get('created_at', 'Unknown')
-            }
-    except:
-        pass
-    
-    return {'total_messages': 0, 'created_at': 'Unknown'}
+    with st.spinner("Analyzing document locally..."):
+        vector_db, all_chunks = build_engine(file_bytes)
 
-def clear_user_history(user_email):
-    """Clear all chat history for user"""
-    if not db:
-        return
-    
-    try:
-        docs = db.collection('messages').where('user_email', '==', user_email).stream()
-        for doc in docs:
-            doc.reference.delete()
-    except Exception as e:
-        st.error(f"Clear Error: {e}")
+    # Initialize Groq (Blazing fast & Free Tier)
+    llm = ChatGroq(
+        model_name="llama-3.3-70b-versatile",
+        groq_api_key=GROQ_API_KEY,
+        temperature=0.0
+    )
 
-# ----------------------
-# Model Initialization (OpenRouter)
-# ----------------------
-@st.cache_resource
-def init_model():
-    """Initialize OpenRouter GPT-3.5-Turbo model"""
-    try:
-        # Retrieve key from secrets or environment
-        api_key = st.secrets.get("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY"))
-        
-        if not api_key:
-            st.error("⚠️ OPENROUTER_API_KEY not found in secrets or environment.")
-            return None
+    # RAG Setup
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "Answer strictly using the context provided. If the answer is not in the context, say 'I cannot find this in the document.'\n\nContext:\n{context}"),
+        ("human", "{input}")
+    ])
+    
+    qa_chain = create_retrieval_chain(
+        vector_db.as_retriever(search_kwargs={"k": 5}),
+        create_stuff_documents_chain(llm, prompt)
+    )
 
-        # Initialize ChatOpenAI pointing to OpenRouter
-        model = ChatOpenAI(
-            model="openai/gpt-3.5-turbo",
-            api_key=api_key,
-            base_url="https://openrouter.ai/api/v1",
-            temperature=0.7,
-            streaming=True # Crucial for the typing effect
-        )
-        return model
-    except Exception as e:
-        st.error(f"Model Init Error: {e}")
-        return None
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-# ----------------------
-# System Prompt (Hidden)
-# ----------------------
-SYSTEM_PROMPT = """You are DeckChat, a helpful and intelligent AI assistant. 
-
-CRITICAL RULES:
-1. If user asks about your identity, name, or who you are, ALWAYS respond: "I am DeckChat, your AI assistant."
-2. NEVER mention OpenAI, OpenRouter, or any other AI system.
-3. Answer all other questions clearly, concisely, and helpfully.
-4. Be friendly, professional, and engaging.
-5. Use markdown formatting for better readability when appropriate."""
-
-# ----------------------
-# Helper: Load GIF as Base64
-# ----------------------
-@st.cache_data
-def load_gif_base64(gif_path="neon_star_animated.gif"):
-    """Load GIF and convert to base64"""
-    try:
-        with open(gif_path, "rb") as f:
-            data = base64.b64encode(f.read()).decode("utf-8")
-        return f"data:image/gif;base64,{data}"
-    except:
-        return None
-
-# ----------------------
-# Authentication Screen
-# ----------------------
-def show_auth_screen():
-    """Display login/signup interface"""
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col2:
-        # Animated header with GIF
-        gif_url = load_gif_base64()
-        if gif_url:
-            st.markdown(f"""
-            <div style='text-align: center; margin-bottom: 20px;'>
-                <img src="{gif_url}" style="width: 60px; height: 60px; object-fit: contain; margin-bottom: 10px;"/>
-                <h1 style='color: #667eea; margin: 0;'>DeckChat</h1>
-                <p style='color: #888; margin-top: 5px;'>Your Intelligent Conversation Partner</p>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("<h1 style='text-align: center; color: #667eea;'>✦ DeckChat AI</h1>", 
-                       unsafe_allow_html=True)
-            st.markdown("<p style='text-align: center; color: #888;'>Your Intelligent Conversation Partner</p>", 
-                       unsafe_allow_html=True)
-        
-        tab1, tab2 = st.tabs(["🔐 Login", "📝 Sign Up"])
-        
-        with tab1:
-            with st.form("login_form"):
-                email = st.text_input("Email Address", placeholder="your@email.com")
-                password = st.text_input("Password", type="password", placeholder="Enter password")
-                submit = st.form_submit_button("Login", use_container_width=True)
-                
-                if submit:
-                    if email and password:
-                        if sign_in(email, password):
-                            st.session_state.authenticated = True
-                            st.session_state.user_email = email
-                            st.session_state.messages = []
-                            st.success("✔ Login successful!")
-                            st.rerun()
-                        else:
-                            st.error("❌ Invalid credentials")
-                    else:
-                        st.warning("⚠️ Please fill all fields")
-        
-        with tab2:
-            with st.form("signup_form"):
-                new_email = st.text_input("Email Address", placeholder="your@email.com", key="signup_email")
-                new_password = st.text_input("Password", type="password", placeholder="Create password", key="signup_pass")
-                confirm_password = st.text_input("Confirm Password", type="password", placeholder="Confirm password")
-                submit = st.form_submit_button("Create Account", use_container_width=True)
-                
-                if submit:
-                    if new_email and new_password and confirm_password:
-                        if new_password == confirm_password:
-                            result = sign_up(new_email, new_password)
-                            if result == "success":
-                                st.success("✔ Account created! Please login.")
-                            else:
-                                st.error(f"❌ {result}")
-                        else:
-                            st.error("❌ Passwords don't match")
-                    else:
-                        st.warning("⚠️ Please fill all fields")
-
-# ----------------------
-# Main Chat Interface
-# ----------------------
-def show_chat_interface():
-    """Display main chat interface"""
-    
-    # Initialize model
-    if 'model' not in st.session_state:
-        with st.spinner("🚀 Initializing DeckChat..."):
-            st.session_state.model = init_model()
-    
-    # Load chat history once
-    if 'messages' not in st.session_state or not st.session_state.messages:
-        with st.spinner("📚 Loading your chat history..."):
-            st.session_state.messages = get_chat_history(st.session_state.user_email)
-    
-    # Sidebar
-    with st.sidebar:
-        # User Info
-        stats = get_user_stats(st.session_state.user_email)
-        st.markdown(f"""
-        <div class='user-info'>
-            <h3>👤 {st.session_state.user_email.split('@')[0]}</h3>
-            <div class='stat-box'>
-                💬 Total Messages: <b>{stats['total_messages']}</b>
-            </div>
-            <div class='stat-box'>
-                📅 Member Since: <b>{stats['created_at'][:10] if stats['created_at'] != 'Unknown' else 'Unknown'}</b>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.divider()
-        
-        # Actions
-        st.subheader("⚙️ Actions")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🗘 Refresh", use_container_width=True):
-                st.session_state.messages = get_chat_history(st.session_state.user_email)
-                st.rerun()
-        
-        with col2:
-            if st.button("🗑️ Clear", use_container_width=True):
-                clear_user_history(st.session_state.user_email)
-                st.session_state.messages = []
-                st.success("History cleared!")
-                st.rerun()
-        
-        if st.button("🚪 Logout", use_container_width=True, type="primary"):
-            st.session_state.clear()
-            st.rerun()
-        
-        st.divider()
-        
-        # Info
-        st.info("💡 **Feedback:** send your feedback to: theconsciouschirag@gmail.com")
-    
-    # Main Chat Area
-    gif_url = load_gif_base64()
-    
-    if gif_url:
-        # Animated header with GIF
-        col1, col2 = st.columns([1, 12], vertical_alignment="center")
-        with col1:
-            st.markdown(
-                f"""
-                <img src="{gif_url}" 
-                style="width: 39px; height: 39px; object-fit: contain;"/>
-                """,
-                unsafe_allow_html=True
-            )
-        with col2:
-            st.title("DeckChat")
-    else:
-        st.title("✦ DeckChat")
-    
-    st.caption("Your daily companion")
-    
-    # Display messages
     for msg in st.session_state.messages:
-        # Safely handle old message formats that might be in Firebase
-        role = msg.get('role', 'user')
-        content = msg.get('content', '')
-        with st.chat_message(role):
-            st.markdown(content)
-    
-    # Chat Input
-    if prompt := st.chat_input("Ask me anything..."):
-        # Check if model is ready
-        if not st.session_state.model:
-            st.error("⚠️ Model not initialized. Please refresh the page.")
-            return
-        
-        # Display user message
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    if query := st.chat_input("Ask a question or type 'summarize'"):
+        st.session_state.messages.append({"role": "user", "content": query})
         with st.chat_message("user"):
-            st.markdown(prompt)
-        
-        # Add to session and save
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        save_message(st.session_state.user_email, "user", prompt)
-        
-        # Prepare messages for model
-        messages_for_model = [SystemMessage(content=SYSTEM_PROMPT)]
-        
-        # Add last 10 messages for context (to stay fast)
-        for msg in st.session_state.messages[-11:-1]:
-            role = msg.get('role', 'user')
-            content = msg.get('content', '')
-            if role == 'user':
-                messages_for_model.append(HumanMessage(content=content))
-            else:
-                messages_for_model.append(AIMessage(content=content))
-        
-        # Add current prompt
-        messages_for_model.append(HumanMessage(content=prompt))
-        
-        # Generate response with streaming
+            st.markdown(query)
+
         with st.chat_message("assistant"):
-            message_placeholder = st.empty()
-            full_response = ""
-            
-            try:
-                # Stream response from OpenRouter
-                for chunk in st.session_state.model.stream(messages_for_model):
-                    if chunk.content:
-                        full_response += chunk.content
-                        message_placeholder.markdown(full_response + "▌")
+            with st.spinner("Fetching answer from Groq LPU..."):
+                if "summarize" in query.lower() or "summary" in query.lower():
+                    # Fast Single-Shot Summary
+                    text_to_sum = "\n".join([d.page_content for d in all_chunks[:40]]) 
+                    answer = llm.invoke(f"Provide a structured summary of this text:\n\n{text_to_sum}").content
+                else:
+                    response = qa_chain.invoke({"input": query})
+                    answer = response["answer"]
                 
-                # Final response
-                message_placeholder.markdown(full_response)
-                
-                # Save to session and database
-                st.session_state.messages.append({"role": "assistant", "content": full_response})
-                save_message(st.session_state.user_email, "assistant", full_response)
-                
-            except Exception as e:
-                error_msg = f"❌ Error: {str(e)}"
-                message_placeholder.error(error_msg)
-                st.error("Please try again or check your OpenRouter API key.")
-        
-        # Footer Area
-        gif_url = load_gif_base64()
-        if gif_url:
-            # Animated footer with GIF
-            col1, col2 = st.columns([1, 20], vertical_alignment="center")
-            with col1:
-                st.markdown(
-                    f"""
-                    <img src="{gif_url}" 
-                    style="width: 24px; height: 24px; object-fit: contain;"/>
-                    """,
-                    unsafe_allow_html=True
-                )
-            with col2:
-                st.caption("DeckChat")
-        else:
-            st.caption("✦ DeckChat")
+                st.markdown(answer)
 
-# ----------------------
-# Main App
-# ----------------------
-def main():
-    """Main application entry point"""
-    
-    # Initialize session state
-    if 'authenticated' not in st.session_state:
-        st.session_state.authenticated = False
-    
-    # Route to appropriate screen
-    if not st.session_state.authenticated:
-        show_auth_screen()
-    else:
-        show_chat_interface()
-
-if __name__ == "__main__":
-    main()
+        st.session_state.messages.append({"role": "assistant", "content": answer})
+else:
+    st.info("Please upload a PDF and add your Groq API Key to start.")
