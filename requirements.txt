@@ -1,10 +1,9 @@
 streamlit
 langchain
-langchain-perplexity
 langchain-core
-pydantic
 langchain-community
+langchain-openai
 firebase-admin
+python-dotenv
 requests
 pydantic
-pydantic-core
