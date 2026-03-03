@@ -1,0 +1,290 @@
+import streamlit as st
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer
+from huggingface_hub import login
+import firebase_admin
+from firebase_admin import credentials, firestore
+from datetime import datetime
+import json
+import hashlib
+import time
+from threading import Thread  # <--- Added for streaming
+
+# ----------------------
+# Page Config & CSS
+# ----------------------
+st.set_page_config(
+    page_title="NeuroChat AI",
+    page_icon="🧠",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.markdown("""
+<style>
+    /* Chat bubbles */
+    .stChatMessage {
+        padding: 1rem;
+        border-radius: 15px;
+        margin-bottom: 10px;
+    }
+    /* Sidebar history styling */
+    .history-btn {
+        text-align: left;
+        padding: 5px;
+        font-size: 0.9em;
+        cursor: pointer;
+    }
+    /* Hide default Streamlit menu */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
+# ----------------------
+# Firebase Setup
+# ----------------------
+@st.cache_resource
+def init_firebase():
+    try:
+        if not firebase_admin._apps:
+            if 'FIREBASE_CONFIG' in st.secrets:
+                cred_dict = json.loads(st.secrets['FIREBASE_CONFIG'])
+                cred = credentials.Certificate(cred_dict)
+                firebase_admin.initialize_app(cred)
+            else:
+                return None
+        return firestore.client()
+    except Exception as e:
+        st.error(f"Firebase Connection Error: {e}")
+        return None
+
+db = init_firebase()
+
+# ----------------------
+# Model Loading (Cached)
+# ----------------------
+@st.cache_resource
+def load_model():
+    # Login if token exists
+    if 'HF_TOKEN' in st.secrets:
+        login(token=st.secrets['HF_TOKEN'])
+    
+    try:
+        model_id = "google/gemma-1.1-2b-it"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            torch_dtype=torch.float16,
+            device_map="auto"
+        )
+        return tokenizer, model
+    except Exception as e:
+        st.error(f"Model Load Error: {e}")
+        return None, None
+
+# ----------------------
+# Authentication Functions
+# ----------------------
+def hash_pass(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def sign_up(email, password):
+    if not db: return "Database Error"
+    users_ref = db.collection('users')
+    if any(users_ref.where('email', '==', email).stream()):
+        return "User already exists"
+    
+    users_ref.add({
+        'email': email,
+        'password_hash': hash_pass(password),
+        'created_at': datetime.utcnow().isoformat()
+    })
+    return "success"
+
+def sign_in(email, password):
+    if not db: return False
+    users_ref = db.collection('users')
+    docs = list(users_ref.where('email', '==', email)
+                .where('password_hash', '==', hash_pass(password)).stream())
+    return True if docs else False
+
+# ----------------------
+# Database Functions
+# ----------------------
+def save_message(user_email, role, content):
+    if db:
+        db.collection('messages').add({
+            'user_email': user_email,
+            'role': role,
+            'content': content,
+            'timestamp': datetime.utcnow()
+        })
+
+def get_lifetime_history(user_email):
+    """Fetches all messages for the user, sorted by time."""
+    if not db: return []
+    try:
+        docs = db.collection('messages')\
+                 .where('user_email', '==', user_email)\
+                 .order_by('timestamp')\
+                 .stream()
+        return [{'role': d.get('role'), 'content': d.get('content')} for d in docs]
+    except Exception as e:
+        st.warning(f"History Sync Error: {e}")
+        return []
+
+# ----------------------
+# Chat Logic (Streaming Enabled)
+# ----------------------
+def start_generation(prompt, tokenizer, model, history_context=[]):
+    """
+    Sets up the thread and streamer for real-time response generation.
+    Includes HISTORY SANITIZATION to fix the 'alternating roles' error.
+    """
+    chat = []
+    
+    # 1. Sanitize History: Ensure strict User/Model alternation
+    # We iterate through history and merge consecutive messages of the same role.
+    for msg in history_context[-5:]: # Look at last 5 to be safe
+        role = "user" if msg['role'] == 'user' else "model"
+        content = msg['content']
+        
+        if not chat:
+            chat.append({"role": role, "content": content})
+        else:
+            if chat[-1]['role'] == role:
+                # ERROR FIX: Merge consecutive same-role messages
+                chat[-1]['content'] += "\n\n" + content
+            else:
+                chat.append({"role": role, "content": content})
+    
+    # 2. Add Current Prompt
+    # Check if the last message in history is ALSO a 'user'. If so, merge.
+    if chat and chat[-1]['role'] == "user":
+        chat[-1]['content'] += "\n\n" + prompt
+    else:
+        chat.append({"role": "user", "content": prompt})
+    
+    # 3. Apply Template
+    formatted_prompt = tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
+    inputs = tokenizer(formatted_prompt, return_tensors="pt").to(model.device)
+    
+    # 4. Setup Streamer
+    streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+    
+    generation_kwargs = dict(
+        inputs, 
+        streamer=streamer, 
+        max_new_tokens=512, 
+        do_sample=True, 
+        temperature=0.7, 
+        top_p=0.9
+    )
+    
+    thread = Thread(target=model.generate, kwargs=generation_kwargs)
+    thread.start()
+    
+    return streamer
+
+# ----------------------
+# Main App
+# ----------------------
+def main():
+    if 'authenticated' not in st.session_state: st.session_state.authenticated = False
+    
+    # --- Auth Screen ---
+    if not st.session_state.authenticated:
+        col1, col2, col3 = st.columns([1,2,1])
+        with col2:
+            st.title("🧠 NeuroChat AI")
+            tab1, tab2 = st.tabs(["Login", "Sign Up"])
+            
+            with tab1:
+                email = st.text_input("Email", key="login_mail")
+                pwd = st.text_input("Password", type="password", key="login_pwd")
+                if st.button("Login", use_container_width=True):
+                    if sign_in(email, pwd):
+                        st.session_state.authenticated = True
+                        st.session_state.user = email
+                        st.rerun()
+                    else:
+                        st.error("Invalid credentials")
+
+            with tab2:
+                new_email = st.text_input("Email", key="sign_mail")
+                new_pwd = st.text_input("Password", type="password", key="sign_pwd")
+                if st.button("Create Account", use_container_width=True):
+                    res = sign_up(new_email, new_pwd)
+                    if res == "success": st.success("Account created! Login now.")
+                    else: st.error(res)
+        return
+
+    # --- Main Chat Screen ---
+    
+    # Sidebar: User Info & History
+    with st.sidebar:
+        st.title("🗂️ History")
+        st.caption(f"Logged in as: {st.session_state.user}")
+        
+        if st.button("🗑️ Clear Current View"):
+            st.session_state.messages = []
+            st.rerun()
+            
+        if st.button("🚪 Logout"):
+            st.session_state.clear()
+            st.rerun()
+
+        st.divider()
+        st.info("Your lifetime chat history is loaded automatically in the main window.")
+
+    # Load Model (Lazy Loading)
+    if 'model' not in st.session_state:
+        with st.spinner("Waking up the AI brain..."):
+            st.session_state.tokenizer, st.session_state.model = load_model()
+
+    # Load History (Only once per session start)
+    if 'messages' not in st.session_state:
+        st.session_state.messages = get_lifetime_history(st.session_state.user)
+
+    # Display Chat
+    st.title("🧠 NeuroChat AI")
+    
+    for msg in st.session_state.messages:
+        with st.chat_message(msg['role']):
+            st.markdown(msg['content'])
+
+    # Input Handler
+    if prompt := st.chat_input("What's on your mind?"):
+        # 1. Show User Message
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        save_message(st.session_state.user, "user", prompt)
+
+        # 2. Generate AI Response (Streaming)
+        with st.chat_message("assistant"):
+            placeholder = st.empty()
+            full_response = ""
+            
+            # Start the streaming thread
+            streamer = start_generation(
+                prompt, 
+                st.session_state.tokenizer, 
+                st.session_state.model, 
+                st.session_state.messages[:-1]
+            )
+
+            # Consume the stream
+            for new_text in streamer:
+                full_response += new_text
+                placeholder.markdown(full_response + "▌")
+            
+            placeholder.markdown(full_response)
+        
+        # 3. Save AI Message
+        st.session_state.messages.append({"role": "assistant", "content": full_response})
+        save_message(st.session_state.user, "assistant", full_response)
+
+if __name__ == "__main__":
+    main()
