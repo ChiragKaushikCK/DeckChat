@@ -1,4 +1,4 @@
-# app.py - DeckChat with Firebase & Perplexity AI
+# app.py - DeckChat with Firebase &GPT-3.5-Turbo
 
 import streamlit as st
 import os
@@ -7,9 +7,12 @@ import hashlib
 import base64
 from datetime import datetime
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-from langchain.chat_models import init_chat_model
+from langchain_openai import ChatOpenAI
 import firebase_admin
 from firebase_admin import credentials, firestore
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ----------------------
 # Page Configuration
@@ -21,37 +24,43 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better UI
+# Custom CSS for Modern Glassmorphism UI
 st.markdown("""
 <style>
     .stChatMessage {
-        padding: 1rem;
+        padding: 1.2rem;
         border-radius: 15px;
-        margin-bottom: 10px;
-        animation: fadeIn 0.3s ease-in;
+        margin-bottom: 15px;
+        animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.02);
     }
     @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(10px); }
+        from { opacity: 0; transform: translateY(15px); }
         to { opacity: 1; transform: translateY(0); }
     }
     .user-info {
-        background: linear-gradient(120deg, #a6c0fe 0%, #f68084 100%);
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 15px;
-        border-radius: 10px;
+        border-radius: 12px;
         color: white;
         margin-bottom: 20px;
         text-align: center;
+        box-shadow: 0 4px 15px rgba(118, 75, 162, 0.3);
     }
     .stat-box {
-        background: rgba(255,255,255,0.1);
+        background: rgba(255,255,255,0.15);
         padding: 10px;
         border-radius: 8px;
-        margin: 5px 0;
+        margin: 8px 0;
+        backdrop-filter: blur(5px);
     }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stTextInput > div > div > input {
         border-radius: 10px;
+        border: 1px solid #ddd;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -199,18 +208,27 @@ def clear_user_history(user_email):
         st.error(f"Clear Error: {e}")
 
 # ----------------------
-# Model Initialization
+# Model Initialization (OpenRouter)
 # ----------------------
 @st.cache_resource
 def init_model():
-    """Initialize Perplexity model"""
+    """Initialize OpenRouter GPT-3.5-Turbo model"""
     try:
-        # Get API key
-        if "PPLX_API_KEY" in st.secrets:
-            os.environ["PPLX_API_KEY"] = st.secrets["PPLX_API_KEY"]
+        # Retrieve key from secrets or environment
+        api_key = st.secrets.get("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY"))
         
-        # Initialize model (sonar is fastest)
-        model = init_chat_model("sonar", model_provider="perplexity")
+        if not api_key:
+            st.error("⚠️ OPENROUTER_API_KEY not found in secrets or environment.")
+            return None
+
+        # Initialize ChatOpenAI pointing to OpenRouter
+        model = ChatOpenAI(
+            model="openai/gpt-3.5-turbo",
+            api_key=api_key,
+            base_url="https://openrouter.ai/api/v1",
+            temperature=0.7,
+            streaming=True # Crucial for the typing effect
+        )
         return model
     except Exception as e:
         st.error(f"Model Init Error: {e}")
@@ -223,7 +241,7 @@ SYSTEM_PROMPT = """You are DeckChat, a helpful and intelligent AI assistant.
 
 CRITICAL RULES:
 1. If user asks about your identity, name, or who you are, ALWAYS respond: "I am DeckChat, your AI assistant."
-2. NEVER mention Perplexity, Claude, or any other AI system.
+2. NEVER mention OpenAI, OpenRouter, or any other AI system.
 3. Answer all other questions clearly, concisely, and helpfully.
 4. Be friendly, professional, and engaging.
 5. Use markdown formatting for better readability when appropriate."""
@@ -363,7 +381,7 @@ def show_chat_interface():
         st.divider()
         
         # Info
-        st.info("💡 **Feedback:** send your feedback to : theconsciouschirag@gmail.com")
+        st.info("💡 **Feedback:** send your feedback to: theconsciouschirag@gmail.com")
     
     # Main Chat Area
     gif_url = load_gif_base64()
@@ -388,8 +406,11 @@ def show_chat_interface():
     
     # Display messages
     for msg in st.session_state.messages:
-        with st.chat_message(msg['role']):
-            st.markdown(msg['content'])
+        # Safely handle old message formats that might be in Firebase
+        role = msg.get('role', 'user')
+        content = msg.get('content', '')
+        with st.chat_message(role):
+            st.markdown(content)
     
     # Chat Input
     if prompt := st.chat_input("Ask me anything..."):
@@ -411,10 +432,12 @@ def show_chat_interface():
         
         # Add last 10 messages for context (to stay fast)
         for msg in st.session_state.messages[-11:-1]:
-            if msg['role'] == 'user':
-                messages_for_model.append(HumanMessage(content=msg['content']))
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')
+            if role == 'user':
+                messages_for_model.append(HumanMessage(content=content))
             else:
-                messages_for_model.append(AIMessage(content=msg['content']))
+                messages_for_model.append(AIMessage(content=content))
         
         # Add current prompt
         messages_for_model.append(HumanMessage(content=prompt))
@@ -425,10 +448,11 @@ def show_chat_interface():
             full_response = ""
             
             try:
-                # Stream response
+                # Stream response from OpenRouter
                 for chunk in st.session_state.model.stream(messages_for_model):
-                    full_response += chunk.content
-                    message_placeholder.markdown(full_response + "▌")
+                    if chunk.content:
+                        full_response += chunk.content
+                        message_placeholder.markdown(full_response + "▌")
                 
                 # Final response
                 message_placeholder.markdown(full_response)
@@ -440,10 +464,10 @@ def show_chat_interface():
             except Exception as e:
                 error_msg = f"❌ Error: {str(e)}"
                 message_placeholder.error(error_msg)
-                st.error("Please try again or refresh the page.")
+                st.error("Please try again or check your OpenRouter API key.")
+        
         # Footer Area
         gif_url = load_gif_base64()
-        
         if gif_url:
             # Animated footer with GIF
             col1, col2 = st.columns([1, 20], vertical_alignment="center")
