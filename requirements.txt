@@ -1,11 +1,9 @@
 streamlit
 langchain
+langchain-groq
 langchain-core
 langchain-community
-langchain-groq
-langchain-text-splitters
-faiss-cpu
-PyMuPDF
-python-dotenv
-sentence-transformers
+firebase-admin
+requests
 pydantic
+pydantic-core
