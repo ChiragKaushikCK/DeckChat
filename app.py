@@ -208,7 +208,7 @@ def load_css():
         /* Code Blocks */
         pre {
             border-radius: 10px !important;
-            background: #737ec9 !important;
+            background: #2a2a2b !important;
             padding: 15px !important;
         }
         
