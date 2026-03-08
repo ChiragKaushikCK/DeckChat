@@ -392,7 +392,7 @@ def get_chat_history(user_email: str, limit: int = 50) -> List[Dict]:
             messages.append({
                 'role': data['role'],
                 'content': data['content'],
-                'timestamp': data['timestamp'].strftime("%Y-%m-%d %H:%M:%S") if data.get('timestamp') else None,
+                'timestamp': data['timestamp'].astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if data.get('timestamp') else None,
                 'model_used': data.get('model_used', 'unknown')
             })
         
@@ -504,7 +504,7 @@ def search_conversations(user_email: str, query: str) -> List[Dict]:
                 results.append({
                     'role': data['role'],
                     'content': data['content'],
-                    'timestamp': data['timestamp'].strftime("%Y-%m-%d %H:%M:%S") if data.get('timestamp') else None,
+                    'timestamp': data['timestamp'].astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if data.get('timestamp') else None,
                     'model_used': data.get('model_used', 'unknown')
                 })
         
