@@ -14,8 +14,8 @@ import pandas as pd
 # LangChain imports
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_openai import ChatOpenAI
-from langchain_classic.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
-from langchain_classic.callbacks.base import BaseCallbackHandler
+from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+from langchain.callbacks.base import BaseCallbackHandler
 
 # Firebase
 import firebase_admin
@@ -40,162 +40,210 @@ st.set_page_config(
 )
 
 # ----------------------
-# ----------------------
 # Load External CSS
 # ----------------------
 def load_css():
-    """Load custom CSS for a premium, modern UI"""
+    """Load custom CSS for better UI"""
     css = """
     <style>
-        /* Global Styles - Sleek Midnight Theme */
+        /* Global Styles */
         .stApp {
-            background-color: #0B0F19; /* Deep sleek midnight blue/black */
-            color: #E2E8F0;
+            background: white;
         }
         
-        /* Center Container */
         .main > div {
-            background: transparent;
-            padding: 2rem;
-            max-width: 900px;
-            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 20px;
+            margin: 10px;
+            backdrop-filter: blur(10px);
         }
         
-        /* Chat Messages Base */
+        /* Chat Messages */
         .stChatMessage {
-            padding: 1.5rem;
-            border-radius: 12px;
-            margin-bottom: 20px;
-            animation: fadeIn 0.4s ease-out;
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 1.2rem;
+            border-radius: 20px;
+            margin-bottom: 15px;
+            animation: slideIn 0.3s ease-out;
+            border: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         }
         
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
+        @keyframes slideIn {
+            from { 
+                opacity: 0; 
+                transform: translateX(-20px);
+            }
+            to { 
+                opacity: 1; 
+                transform: translateX(0);
+            }
         }
         
         /* User Message */
         [data-testid="chat-message-user"] {
-            background-color: #1E293B; /* Slate 800 */
-            border-left: 4px solid #3B82F6; /* Blue accent */
-            margin-left: auto;
-            width: 85%;
+            background: linear-gradient(90deg,rgba(230, 230, 230, 1) 0%, rgba(255, 255, 255, 1) 55%, rgba(237, 221, 83, 1) 100%);
+            color: white;
+            margin-left: 20%;
         }
         
         /* Assistant Message */
         [data-testid="chat-message-assistant"] {
-            background-color: #0F172A; /* Slate 900 */
-            border-left: 4px solid #10B981; /* Emerald accent */
-            margin-right: auto;
-            width: 95%;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            background: linear-gradient(90deg,rgba(230, 230, 230, 1) 0%, rgba(255, 255, 255, 1) 55%, rgba(237, 221, 83, 1) 100%);
+            color: #2d3748;
+            margin-right: 20%;
         }
         
-        /* Sidebar Profile & Cards */
-        [data-testid="stSidebar"] {
-            background-color: #0B0F19 !important;
-            border-right: 1px solid rgba(255,255,255,0.05);
+        /* Sidebar */
+        .css-1d391kg {
+            background: linear-gradient(180deg, #2d3748 0%, #1a202c 100%);
         }
         
+        .sidebar-content {
+            color: white;
+            padding: 20px;
+        }
+        
+        /* User Profile Card */
         .user-profile {
-            background: linear-gradient(145deg, #1E293B, #0F172A);
+            background: linear-gradient(90deg,rgba(230, 230, 230, 1) 0%, rgba(255, 255, 255, 1) 48%, rgba(245, 160, 56, 1) 53%, rgba(237, 221, 83, 1) 100%);
             padding: 25px;
-            border-radius: 16px;
+            border-radius: 20px;
             color: white;
             margin-bottom: 20px;
             text-align: center;
-            border: 1px solid rgba(255,255,255,0.05);
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            animation: glow 2s ease-in-out infinite alternate;
         }
         
-        /* Stat Cards */
+        @keyframes glow {
+            from { box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3); }
+            to { box-shadow: 0 10px 40px rgba(102, 126, 234, 0.6); }
+        }
+        
+        /* Stats Cards */
         .stat-card {
-            background: rgba(255,255,255,0.03);
+            background: rgba(255,255,255,0.1);
             padding: 15px;
-            border-radius: 12px;
-            border: 1px solid rgba(255,255,255,0.05);
-            transition: all 0.2s ease;
+            border-radius: 15px;
+            margin: 10px 0;
+            backdrop-filter: blur(5px);
+            transition: transform 0.3s;
         }
         
         .stat-card:hover {
-            background: rgba(255,255,255,0.06);
-            border-color: rgba(255,255,255,0.1);
+            transform: translateY(-5px);
+        }
+        
+        /* Typing Indicator */
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 20px;
+            margin: 10px 0;
+        }
+        
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            margin: 0 3px;
+            background: #667eea;
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+        
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+        
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-10px); }
         }
         
         /* Input Box */
-        .stChatInputContainer {
-            padding-bottom: 2rem !important;
-            background-color: transparent !important;
-        }
-        
-        div[data-testid="stForm"] {
-            background-color: #1E293B !important;
-            border: 1px solid rgba(255,255,255,0.1) !important;
-            border-radius: 16px !important;
-            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
-        }
-        
         .stTextInput > div > div > input {
-            color: #E2E8F0 !important;
-            caret-color: #3B82F6;
-            background-color: transparent !important;
-            border: none !important;
+            border-radius: 25px !important;
+            border: 2px solid #667eea !important;
+            padding: 15px 20px !important;
+            font-size: 16px !important;
+            background: white !important;
         }
         
         .stTextInput > div > div > input:focus {
-            box-shadow: none !important;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.3) !important;
         }
         
         /* Buttons */
         .stButton > button {
-            border-radius: 8px !important;
-            background-color: #1E293B;
-            color: #E2E8F0;
-            border: 1px solid rgba(255,255,255,0.1);
-            font-weight: 500;
-            transition: all 0.2s;
+            border-radius: 25px !important;
+            background: linear-gradient(120deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 10px 25px;
+            font-weight: 600;
+            transition: all 0.3s;
         }
         
         .stButton > button:hover {
-            background-color: #3B82F6;
-            border-color: #3B82F6;
-            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
         }
         
-        .stButton > button[kind="primary"] {
-            background-color: #3B82F6;
-            border: none;
+        /* Tabs */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 10px;
+            background: rgba(255,255,255,0.1);
+            padding: 10px;
+            border-radius: 15px;
         }
         
-        .stButton > button[kind="primary"]:hover {
-            background-color: #2563EB;
+        .stTabs [data-baseweb="tab"] {
+            border-radius: 25px;
+            padding: 10px 20px;
+            font-weight: 600;
         }
         
         /* Code Blocks */
         pre {
-            border-radius: 8px !important;
-            background: #0F172A !important;
-            border: 1px solid rgba(255,255,255,0.05);
-            padding: 1rem !important;
+            border-radius: 10px !important;
+            background: #1e1e2f !important;
+            padding: 15px !important;
         }
         
-        /* Custom Scrollbar */
-        ::-webkit-scrollbar {
-            width: 8px;
-            background: transparent;
+        /* Animations */
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
         }
-        ::-webkit-scrollbar-thumb {
-            background: #334155;
-            border-radius: 4px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #475569;
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
         }
         
         /* Hide Streamlit Branding */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 10px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(120deg, #667eea 0%, #764ba2 100%);
+            border-radius: 10px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(120deg, #764ba2 0%, #667eea 100%);
+        }
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
