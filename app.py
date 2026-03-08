@@ -7,19 +7,22 @@ import json
 import hashlib
 import base64
 import time
-import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Dict, Optional
 import pandas as pd
 
 # LangChain imports
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_openai import ChatOpenAI
-from langchain_groq import ChatGroq
+from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+from langchain.callbacks.base import BaseCallbackHandler
 
 # Firebase
 import firebase_admin
 from firebase_admin import credentials, firestore
+
+# For better streaming
+from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 # ----------------------
 # Page Configuration
@@ -37,41 +40,34 @@ st.set_page_config(
 )
 
 # ----------------------
-# Load Custom CSS
+# ----------------------
+# Load External CSS
 # ----------------------
 def load_css():
-    """Load custom CSS for Deepseek-like UI"""
+    """Load custom CSS for a premium, modern UI"""
     css = """
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-        
-        * {
-            font-family: 'Inter', sans-serif;
-        }
-        
-        /* Main container */
+        /* Global Styles - Sleek Midnight Theme */
         .stApp {
-            background-color: #ffffff;
+            background-color: #0B0F19; /* Deep sleek midnight blue/black */
+            color: #E2E8F0;
         }
         
+        /* Center Container */
         .main > div {
-            padding: 0rem 1rem;
+            background: transparent;
+            padding: 2rem;
             max-width: 900px;
             margin: 0 auto;
         }
         
-        /* Hide Streamlit branding */
-        #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
-        header {visibility: hidden;}
-        
-        /* Message styling */
-        .chat-message {
-            display: flex;
-            padding: 24px 16px;
-            gap: 16px;
-            border-bottom: 1px solid #f0f0f0;
-            animation: fadeIn 0.3s ease;
+        /* Chat Messages Base */
+        .stChatMessage {
+            padding: 1.5rem;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            animation: fadeIn 0.4s ease-out;
+            border: 1px solid rgba(255, 255, 255, 0.05);
         }
         
         @keyframes fadeIn {
@@ -79,476 +75,127 @@ def load_css():
             to { opacity: 1; transform: translateY(0); }
         }
         
-        .user-message {
-            background-color: #ffffff;
+        /* User Message */
+        [data-testid="chat-message-user"] {
+            background-color: #1E293B; /* Slate 800 */
+            border-left: 4px solid #3B82F6; /* Blue accent */
+            margin-left: auto;
+            width: 85%;
         }
         
-        .assistant-message {
-            background-color: #fafafa;
+        /* Assistant Message */
+        [data-testid="chat-message-assistant"] {
+            background-color: #0F172A; /* Slate 900 */
+            border-left: 4px solid #10B981; /* Emerald accent */
+            margin-right: auto;
+            width: 95%;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
         }
         
-        .avatar {
-            width: 36px;
-            height: 36px;
-            border-radius: 4px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 20px;
-            flex-shrink: 0;
+        /* Sidebar Profile & Cards */
+        [data-testid="stSidebar"] {
+            background-color: #0B0F19 !important;
+            border-right: 1px solid rgba(255,255,255,0.05);
         }
         
-        .user-avatar {
-            background-color: #e5e7eb;
-            color: #4b5563;
-        }
-        
-        .assistant-avatar {
-            background: linear-gradient(135deg, #2563eb, #7c3aed);
-            color: white;
-        }
-        
-        .message-content {
-            flex: 1;
-            line-height: 1.6;
-            color: #1f2937;
-            font-size: 16px;
-            overflow-x: auto;
-        }
-        
-        .message-content p {
-            margin: 0 0 12px 0;
-        }
-        
-        .message-content p:last-child {
-            margin-bottom: 0;
-        }
-        
-        /* Markdown styling */
-        .message-content h1 {
-            font-size: 24px;
-            font-weight: 700;
-            margin: 16px 0 8px 0;
-            color: #111827;
-        }
-        
-        .message-content h2 {
-            font-size: 20px;
-            font-weight: 600;
-            margin: 14px 0 6px 0;
-            color: #1f2937;
-        }
-        
-        .message-content h3 {
-            font-size: 18px;
-            font-weight: 600;
-            margin: 12px 0 4px 0;
-            color: #2d3748;
-        }
-        
-        .message-content h4 {
-            font-size: 16px;
-            font-weight: 600;
-            margin: 10px 0 4px 0;
-            color: #374151;
-        }
-        
-        .message-content strong {
-            font-weight: 600;
-            color: #111827;
-        }
-        
-        .message-content em {
-            font-style: italic;
-            color: #4b5563;
-        }
-        
-        .message-content ul, .message-content ol {
-            margin: 8px 0 12px 20px;
-            padding-left: 0;
-        }
-        
-        .message-content li {
-            margin: 4px 0;
-            line-height: 1.6;
-        }
-        
-        .message-content code {
-            background-color: #f3f4f6;
-            color: #ef4444;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 14px;
-            font-family: 'Monaco', 'Menlo', monospace;
-        }
-        
-        .message-content pre {
-            background-color: #1e1e2f;
-            color: #e5e7eb;
-            padding: 16px;
-            border-radius: 8px;
-            overflow-x: auto;
-            margin: 16px 0;
-        }
-        
-        .message-content pre code {
-            background-color: transparent;
-            color: inherit;
-            padding: 0;
-            font-size: 14px;
-            line-height: 1.5;
-        }
-        
-        .message-content blockquote {
-            border-left: 4px solid #2563eb;
-            padding: 8px 16px;
-            margin: 16px 0;
-            background-color: #f8fafc;
-            color: #334155;
-            font-style: italic;
-        }
-        
-        .message-content table {
-            border-collapse: collapse;
-            width: 100%;
-            margin: 16px 0;
-        }
-        
-        .message-content th {
-            background-color: #f3f4f6;
-            font-weight: 600;
-            padding: 8px 12px;
-            border: 1px solid #e5e7eb;
-        }
-        
-        .message-content td {
-            padding: 8px 12px;
-            border: 1px solid #e5e7eb;
-        }
-        
-        .message-content hr {
-            margin: 24px 0;
-            border: none;
-            border-top: 1px solid #e5e7eb;
-        }
-        
-        /* Input area */
-        .input-container {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            background: linear-gradient(to top, #ffffff, #ffffff, transparent);
-            padding: 20px 16px 16px;
-            max-width: 900px;
-            margin: 0 auto;
-            z-index: 100;
-        }
-        
-        .input-box {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            background-color: #ffffff;
-            border: 1px solid #e5e7eb;
+        .user-profile {
+            background: linear-gradient(145deg, #1E293B, #0F172A);
+            padding: 25px;
             border-radius: 16px;
-            padding: 8px 8px 8px 16px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-            transition: all 0.2s;
-        }
-        
-        .input-box:focus-within {
-            border-color: #2563eb;
-            box-shadow: 0 4px 20px rgba(37,99,235,0.15);
-        }
-        
-        .input-box input {
-            flex: 1;
-            border: none;
-            outline: none;
-            font-size: 16px;
-            padding: 12px 0;
-            background: transparent;
-            color: #1f2937;
-        }
-        
-        .input-box input::placeholder {
-            color: #9ca3af;
-        }
-        
-        .input-box button {
-            background: linear-gradient(135deg, #2563eb, #7c3aed);
             color: white;
-            border: none;
-            border-radius: 12px;
-            padding: 10px 20px;
-            font-weight: 600;
-            font-size: 14px;
-            cursor: pointer;
-            transition: all 0.2s;
-            min-width: 80px;
-        }
-        
-        .input-box button:hover {
-            opacity: 0.9;
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(37,99,235,0.3);
-        }
-        
-        .input-box button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
-        /* Sidebar styling */
-        .css-1d391kg {
-            background-color: #ffffff;
-            border-right: 1px solid #f0f0f0;
-        }
-        
-        .sidebar-header {
-            padding: 24px;
-            border-bottom: 1px solid #f0f0f0;
-        }
-        
-        .new-chat-btn {
-            background: linear-gradient(135deg, #2563eb, #7c3aed);
-            color: white;
-            border: none;
-            border-radius: 12px;
-            padding: 12px;
-            font-weight: 600;
-            width: 100%;
-            cursor: pointer;
-            margin-bottom: 16px;
-            transition: all 0.2s;
-        }
-        
-        .new-chat-btn:hover {
-            opacity: 0.9;
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(37,99,235,0.3);
-        }
-        
-        .session-item {
-            padding: 12px 16px;
-            margin: 4px 8px;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: #4b5563;
-        }
-        
-        .session-item:hover {
-            background-color: #f3f4f6;
-        }
-        
-        .session-item.active {
-            background: linear-gradient(135deg, #2563eb10, #7c3aed10);
-            color: #2563eb;
-            border-left: 3px solid #2563eb;
-        }
-        
-        .session-icon {
-            font-size: 18px;
-        }
-        
-        .session-title {
-            flex: 1;
-            font-size: 14px;
-            font-weight: 500;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        
-        .session-time {
-            font-size: 12px;
-            color: #9ca3af;
-        }
-        
-        .delete-btn {
-            opacity: 0;
-            transition: opacity 0.2s;
-            color: #ef4444;
-            font-size: 18px;
-            cursor: pointer;
-            padding: 0 4px;
-        }
-        
-        .session-item:hover .delete-btn {
-            opacity: 1;
-        }
-        
-        /* Model selector */
-        .model-selector {
-            background-color: #f9fafb;
-            border-radius: 12px;
-            padding: 8px;
-            margin: 16px 0;
-            display: flex;
-            gap: 8px;
-        }
-        
-        .model-btn {
-            flex: 1;
-            padding: 10px;
-            border-radius: 8px;
-            border: none;
-            font-weight: 600;
-            font-size: 14px;
-            cursor: pointer;
-            transition: all 0.2s;
-            background-color: transparent;
-            color: #6b7280;
-        }
-        
-        .model-btn.active {
-            background: linear-gradient(135deg, #2563eb, #7c3aed);
-            color: white;
-            box-shadow: 0 2px 8px rgba(37,99,235,0.3);
-        }
-        
-        .model-btn:not(.active):hover {
-            background-color: #e5e7eb;
-            color: #1f2937;
-        }
-        
-        /* Typing indicator */
-        .typing-indicator {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 16px;
-            color: #6b7280;
-        }
-        
-        .typing-dots {
-            display: flex;
-            gap: 4px;
-        }
-        
-        .typing-dots span {
-            width: 8px;
-            height: 8px;
-            background-color: #9ca3af;
-            border-radius: 50%;
-            animation: typing 1.4s infinite;
-        }
-        
-        .typing-dots span:nth-child(2) {
-            animation-delay: 0.2s;
-        }
-        
-        .typing-dots span:nth-child(3) {
-            animation-delay: 0.4s;
-        }
-        
-        @keyframes typing {
-            0%, 60%, 100% { transform: translateY(0); }
-            30% { transform: translateY(-8px); }
-        }
-        
-        /* Welcome screen */
-        .welcome-container {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 70vh;
+            margin-bottom: 20px;
             text-align: center;
-            padding: 2rem;
+            border: 1px solid rgba(255,255,255,0.05);
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
         }
         
-        .welcome-icon {
-            font-size: 64px;
-            margin-bottom: 24px;
-            animation: float 3s ease-in-out infinite;
+        /* Stat Cards */
+        .stat-card {
+            background: rgba(255,255,255,0.03);
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.05);
+            transition: all 0.2s ease;
         }
         
-        @keyframes float {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-10px); }
+        .stat-card:hover {
+            background: rgba(255,255,255,0.06);
+            border-color: rgba(255,255,255,0.1);
         }
         
-        .welcome-title {
-            font-size: 36px;
-            font-weight: 700;
-            background: linear-gradient(135deg, #2563eb, #7c3aed);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-bottom: 16px;
+        /* Input Box */
+        .stChatInputContainer {
+            padding-bottom: 2rem !important;
+            background-color: transparent !important;
         }
         
-        .welcome-subtitle {
-            color: #6b7280;
-            font-size: 18px;
-            max-width: 500px;
-            margin-bottom: 32px;
+        div[data-testid="stForm"] {
+            background-color: #1E293B !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            border-radius: 16px !important;
+            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
         }
         
-        .suggestion-chips {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            justify-content: center;
-            max-width: 600px;
+        .stTextInput > div > div > input {
+            color: #E2E8F0 !important;
+            caret-color: #3B82F6;
+            background-color: transparent !important;
+            border: none !important;
         }
         
-        .chip {
-            background-color: #f3f4f6;
-            color: #4b5563;
-            padding: 12px 20px;
-            border-radius: 30px;
-            font-size: 14px;
-            cursor: pointer;
+        .stTextInput > div > div > input:focus {
+            box-shadow: none !important;
+        }
+        
+        /* Buttons */
+        .stButton > button {
+            border-radius: 8px !important;
+            background-color: #1E293B;
+            color: #E2E8F0;
+            border: 1px solid rgba(255,255,255,0.1);
+            font-weight: 500;
             transition: all 0.2s;
-            border: 1px solid transparent;
         }
         
-        .chip:hover {
-            background-color: #e5e7eb;
-            border-color: #2563eb;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        .stButton > button:hover {
+            background-color: #3B82F6;
+            border-color: #3B82F6;
+            color: white;
         }
         
-        /* Scrollbar */
+        .stButton > button[kind="primary"] {
+            background-color: #3B82F6;
+            border: none;
+        }
+        
+        .stButton > button[kind="primary"]:hover {
+            background-color: #2563EB;
+        }
+        
+        /* Code Blocks */
+        pre {
+            border-radius: 8px !important;
+            background: #0F172A !important;
+            border: 1px solid rgba(255,255,255,0.05);
+            padding: 1rem !important;
+        }
+        
+        /* Custom Scrollbar */
         ::-webkit-scrollbar {
             width: 8px;
-            height: 8px;
+            background: transparent;
         }
-        
-        ::-webkit-scrollbar-track {
-            background: #f1f1f1;
-        }
-        
         ::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
+            background: #334155;
             border-radius: 4px;
         }
-        
         ::-webkit-scrollbar-thumb:hover {
-            background: #94a3b8;
+            background: #475569;
         }
         
-        /* Metadata */
-        .message-meta {
-            font-size: 12px;
-            color: #9ca3af;
-            margin-top: 8px;
-        }
-        
-        /* Divider */
-        .divider {
-            margin: 16px 0;
-            border: none;
-            border-top: 1px solid #f0f0f0;
-        }
+        /* Hide Streamlit Branding */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
@@ -563,8 +210,10 @@ def init_firebase():
         if not firebase_admin._apps:
             if 'FIREBASE_CONFIG' in st.secrets:
                 try:
+                    # Try to parse as JSON string
                     cred_dict = json.loads(st.secrets['FIREBASE_CONFIG'])
                 except json.JSONDecodeError:
+                    # If it's already a dict
                     cred_dict = st.secrets['FIREBASE_CONFIG']
                 
                 cred = credentials.Certificate(cred_dict)
@@ -582,18 +231,23 @@ def init_firebase():
 # Authentication Functions
 # ----------------------
 def hash_password(password: str) -> str:
+    """Hash password for secure storage"""
     return hashlib.sha256(password.encode()).hexdigest()
 
 def sign_up(email: str, password: str) -> tuple:
+    """Create new user account"""
     if not db:
         return False, "Database connection error"
     
     try:
         users_ref = db.collection('users')
+        
+        # Check if user exists
         existing = list(users_ref.where('email', '==', email).stream())
         if existing:
             return False, "User already exists"
         
+        # Create new user
         user_data = {
             'email': email,
             'password_hash': hash_password(password),
@@ -603,16 +257,19 @@ def sign_up(email: str, password: str) -> tuple:
             'last_active': datetime.utcnow(),
             'preferences': {
                 'model': 'base',
-                'theme': 'light'
+                'theme': 'light',
+                'notifications': True
             }
         }
         
         users_ref.add(user_data)
         return True, "Account created successfully!"
+        
     except Exception as e:
         return False, f"Error: {str(e)}"
 
 def sign_in(email: str, password: str) -> tuple:
+    """Authenticate user"""
     if not db:
         return False, "Database connection error"
     
@@ -622,6 +279,7 @@ def sign_in(email: str, password: str) -> tuple:
                    .where('password_hash', '==', hash_password(password)).stream())
         
         if docs:
+            # Update last active
             user_ref = users_ref.document(docs[0].id)
             user_ref.update({
                 'last_active': datetime.utcnow(),
@@ -630,70 +288,52 @@ def sign_in(email: str, password: str) -> tuple:
             return True, "Login successful!"
         
         return False, "Invalid credentials"
+        
     except Exception as e:
         return False, f"Error: {str(e)}"
 
 # ----------------------
-# Session Management
+# Database Functions
 # ----------------------
-def create_session(user_email: str, title: str = "New Chat") -> str:
-    """Create a new chat session"""
-    if not db:
-        return str(uuid.uuid4())
-    
-    session_id = str(uuid.uuid4())
-    try:
-        db.collection('sessions').add({
-            'user_email': user_email,
-            'session_id': session_id,
-            'title': title,
-            'created_at': datetime.utcnow(),
-            'updated_at': datetime.utcnow(),
-            'message_count': 0
-        })
-    except Exception as e:
-        st.warning(f"Session creation error: {e}")
-    
-    return session_id
+def save_message(user_email: str, role: str, content: str, model_used: str = None):
+    """Save message to Firebase with metadata"""
+    if db:
+        try:
+            message_data = {
+                'user_email': user_email,
+                'role': role,
+                'content': content,
+                'timestamp': datetime.utcnow(),
+                'model_used': model_used,
+                'tokens': len(content.split())  # Approximate token count
+            }
+            
+            db.collection('messages').add(message_data)
+            
+            # Update user message count
+            users_ref = db.collection('users')
+            user_docs = list(users_ref.where('email', '==', user_email).stream())
+            if user_docs:
+                user_ref = users_ref.document(user_docs[0].id)
+                user_ref.update({
+                    'total_messages': firestore.Increment(1),
+                    'last_active': datetime.utcnow()
+                })
+                    
+        except Exception as e:
+            st.warning(f"⚠️ Could not save message: {str(e)}")
 
-def get_user_sessions(user_email: str) -> List[Dict]:
-    """Get all sessions for user"""
+def get_chat_history(user_email: str, limit: int = 50) -> List[Dict]:
+    """Get user's chat history with pagination support"""
     if not db:
         return []
     
     try:
-        docs = db.collection('sessions')\
-                 .where('user_email', '==', user_email)\
-                 .order_by('updated_at', direction=firestore.Query.DESCENDING)\
-                 .stream()
-        
-        sessions = []
-        for doc in docs:
-            data = doc.to_dict()
-            sessions.append({
-                'id': doc.id,
-                'session_id': data['session_id'],
-                'title': data['title'],
-                'created_at': data['created_at'],
-                'updated_at': data.get('updated_at', data['created_at']),
-                'message_count': data.get('message_count', 0)
-            })
-        
-        return sessions
-    except Exception as e:
-        st.warning(f"Error loading sessions: {e}")
-        return []
-
-def get_session_messages(user_email: str, session_id: str) -> List[Dict]:
-    """Get messages for a specific session"""
-    if not db:
-        return []
-    
-    try:
+        # Get messages sorted by timestamp
         docs = db.collection('messages')\
                  .where('user_email', '==', user_email)\
-                 .where('session_id', '==', session_id)\
-                 .order_by('timestamp')\
+                 .order_by('timestamp', direction=firestore.Query.DESCENDING)\
+                 .limit(limit)\
                  .stream()
         
         messages = []
@@ -702,88 +342,28 @@ def get_session_messages(user_email: str, session_id: str) -> List[Dict]:
             messages.append({
                 'role': data['role'],
                 'content': data['content'],
-                'timestamp': data['timestamp'].strftime("%I:%M %p") if data.get('timestamp') else None,
+                'timestamp': data['timestamp'].strftime("%Y-%m-%d %H:%M:%S") if data.get('timestamp') else None,
                 'model_used': data.get('model_used', 'unknown')
             })
         
-        return messages
+        # Return in chronological order
+        return list(reversed(messages))
+        
     except Exception as e:
-        st.warning(f"Error loading messages: {e}")
+        st.warning(f"⚠️ Could not load history: {str(e)}")
         return []
 
-def save_message(user_email: str, session_id: str, role: str, content: str, model_used: str = None):
-    """Save message to a specific session"""
-    if not db:
-        return
-    
-    try:
-        # Save message
-        db.collection('messages').add({
-            'user_email': user_email,
-            'session_id': session_id,
-            'role': role,
-            'content': content,
-            'timestamp': datetime.utcnow(),
-            'model_used': model_used
-        })
-        
-        # Update session
-        sessions = db.collection('sessions')\
-                     .where('user_email', '==', user_email)\
-                     .where('session_id', '==', session_id)\
-                     .stream()
-        
-        for session in sessions:
-            session_ref = db.collection('sessions').document(session.id)
-            session_ref.update({
-                'updated_at': datetime.utcnow(),
-                'message_count': firestore.Increment(1)
-            })
-            
-            # Set title from first user message
-            if role == 'user' and session.to_dict().get('message_count', 0) == 0:
-                title = content[:40] + "..." if len(content) > 40 else content
-                session_ref.update({'title': title})
-        
-        # Update user stats
-        users_ref = db.collection('users')
-        user_docs = list(users_ref.where('email', '==', user_email).stream())
-        if user_docs:
-            user_ref = users_ref.document(user_docs[0].id)
-            user_ref.update({'total_messages': firestore.Increment(1)})
-            
-    except Exception as e:
-        st.warning(f"Save Error: {e}")
-
-def delete_session(user_email: str, session_id: str):
-    """Delete a session and its messages"""
-    if not db:
-        return
-    
-    try:
-        # Delete messages
-        messages = db.collection('messages')\
-                     .where('user_email', '==', user_email)\
-                     .where('session_id', '==', session_id)\
-                     .stream()
-        for msg in messages:
-            msg.reference.delete()
-        
-        # Delete session
-        sessions = db.collection('sessions')\
-                     .where('user_email', '==', user_email)\
-                     .where('session_id', '==', session_id)\
-                     .stream()
-        for session in sessions:
-            session.reference.delete()
-            
-    except Exception as e:
-        st.error(f"Delete Error: {e}")
-
 def get_user_stats(user_email: str) -> Dict:
-    """Get user statistics"""
+    """Get comprehensive user statistics"""
     if not db:
-        return {'total_messages': 0, 'total_sessions': 0}
+        return {
+            'total_messages': 0,
+            'total_sessions': 0,
+            'created_at': 'Unknown',
+            'last_active': 'Unknown',
+            'avg_messages_per_session': 0,
+            'preferences': {}
+        }
     
     try:
         users_ref = db.collection('users')
@@ -791,66 +371,216 @@ def get_user_stats(user_email: str) -> Dict:
         
         if user_docs:
             data = user_docs[0].to_dict()
+            
+            # Get message count for today
+            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_messages = list(db.collection('messages')
+                                .where('user_email', '==', user_email)
+                                .where('timestamp', '>=', today_start)
+                                .stream())
+            
+            total_sessions = data.get('total_sessions', 1)
+            total_messages = data.get('total_messages', 0)
+            
             return {
-                'total_messages': data.get('total_messages', 0),
-                'total_sessions': data.get('total_sessions', 0),
-                'created_at': data.get('created_at', datetime.utcnow())
+                'total_messages': total_messages,
+                'total_sessions': total_sessions,
+                'created_at': data.get('created_at', datetime.utcnow()),
+                'last_active': data.get('last_active', datetime.utcnow()),
+                'today_messages': len(today_messages),
+                'avg_messages_per_session': round(total_messages / max(total_sessions, 1), 1),
+                'preferences': data.get('preferences', {})
             }
-    except:
-        pass
     
-    return {'total_messages': 0, 'total_sessions': 0}
+    except Exception as e:
+        st.warning(f"⚠️ Could not load stats: {str(e)}")
+    
+    return {
+        'total_messages': 0,
+        'total_sessions': 0,
+        'created_at': datetime.utcnow(),
+        'last_active': datetime.utcnow(),
+        'today_messages': 0,
+        'avg_messages_per_session': 0,
+        'preferences': {}
+    }
+
+def update_user_preferences(user_email: str, preferences: Dict):
+    """Update user preferences"""
+    if db:
+        try:
+            users_ref = db.collection('users')
+            user_docs = list(users_ref.where('email', '==', user_email).stream())
+            if user_docs:
+                user_ref = users_ref.document(user_docs[0].id)
+                user_ref.update({'preferences': preferences})
+                return True
+        except Exception as e:
+            st.warning(f"⚠️ Could not update preferences: {str(e)}")
+    return False
+
+def clear_user_history(user_email: str):
+    """Clear all chat history for user"""
+    if db:
+        try:
+            batch = db.batch()
+            docs = db.collection('messages').where('user_email', '==', user_email).stream()
+            for doc in docs:
+                batch.delete(doc.reference)
+            batch.commit()
+            return True
+        except Exception as e:
+            st.error(f"❌ Clear Error: {str(e)}")
+    return False
+
+def search_conversations(user_email: str, query: str) -> List[Dict]:
+    """Search through user's chat history"""
+    if not db:
+        return []
+    
+    try:
+        # Get all messages and search in memory (Firestore doesn't support text search natively)
+        docs = db.collection('messages')\
+                 .where('user_email', '==', user_email)\
+                 .order_by('timestamp', direction=firestore.Query.DESCENDING)\
+                 .limit(500)\
+                 .stream()
+        
+        results = []
+        for doc in docs:
+            data = doc.to_dict()
+            content = data.get('content', '').lower()
+            if query.lower() in content:
+                results.append({
+                    'role': data['role'],
+                    'content': data['content'],
+                    'timestamp': data['timestamp'].strftime("%Y-%m-%d %H:%M:%S") if data.get('timestamp') else None,
+                    'model_used': data.get('model_used', 'unknown')
+                })
+        
+        return results[:20]  # Return top 20 matches
+        
+    except Exception as e:
+        st.warning(f"⚠️ Search error: {str(e)}")
+        return []
 
 # ----------------------
 # Model Initialization
 # ----------------------
-def init_openrouter_model():
-    """Initialize OpenRouter model (Base)"""
+class StreamHandler(BaseCallbackHandler):
+    """Custom stream handler for better streaming experience"""
+    def __init__(self, container, initial_text=""):
+        self.container = container
+        self.text = initial_text
+        
+    def on_llm_new_token(self, token: str, **kwargs) -> None:
+        self.text += token
+        self.container.markdown(self.text + "▌")
+
+def init_openrouter_model(model_name: str = "openai/gpt-3.5-turbo"):
+    """Initialize OpenRouter model"""
     try:
+        # Get API key from secrets
         api_key = st.secrets.get("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY"))
+        
         if not api_key:
+            st.error("❌ OpenRouter API key not found in secrets")
             return None
         
-        return ChatOpenAI(
-            model="openai/gpt-3.5-turbo",
+        # Initialize model
+        model = ChatOpenAI(
+            model=model_name,
             api_key=api_key,
             base_url="https://openrouter.ai/api/v1",
+            streaming=True,
             temperature=0.7,
             max_tokens=2000,
-            streaming=True,
+            callbacks=[StreamingStdOutCallbackHandler()],
             default_headers={
                 "HTTP-Referer": "https://deckchat.streamlit.app",
                 "X-Title": "DeckChat Pro"
             }
         )
+        return model
+        
     except Exception as e:
-        st.error(f"OpenRouter init error: {e}")
+        st.error(f"❌ Model initialization error: {str(e)}")
         return None
 
 def init_groq_model():
-    """Initialize Groq model (Pro)"""
+    """Initialize Groq model for pro version"""
     try:
+        # Get API key from secrets
         api_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY"))
+        
         if not api_key:
+            st.error("❌ Groq API key not found in secrets")
             return None
         
-        return ChatGroq(
+        # Initialize Groq model
+        from langchain_groq import ChatGroq
+        
+        model = ChatGroq(
             model="llama-3.3-70b-versatile",
             api_key=api_key,
             temperature=0.7,
             max_tokens=4000,
             streaming=True
         )
+        return model
+        
     except Exception as e:
-        st.error(f"Groq init error: {e}")
+        st.error(f"❌ Groq initialization error: {str(e)}")
         return None
 
 # ----------------------
 # System Prompts
 # ----------------------
-SYSTEM_PROMPT = """You are DeckChat Pro, a helpful AI assistant. 
-Be concise, accurate, and friendly. Use markdown formatting for better readability.
-When asked about your identity, say you're DeckChat Pro."""
+SYSTEM_PROMPTS = {
+    "default": """You are DeckChat Pro, an advanced AI assistant created to help users with any task.
+    
+Core Identity:
+- Name: DeckChat Pro
+- Creator: Built with cutting-edge AI technology
+- Purpose: To provide helpful, accurate, and engaging responses
+
+Guidelines:
+1. Always identify yourself as "DeckChat Pro" when asked about your identity
+2. Never claim to be another AI system (Claude, GPT, etc.)
+3. Provide comprehensive, well-structured responses
+4. Use markdown formatting for better readability
+5. Be friendly, professional, and empathetic
+6. Acknowledge limitations when appropriate
+7. Encourage follow-up questions
+
+Remember: You are DeckChat Pro - helpful, harmless, and honest.""",
+
+    "code": """You are DeckChat Pro - Code Specialist.
+Focus on providing clean, efficient code solutions with:
+- Proper documentation
+- Best practices
+- Error handling
+- Performance considerations
+- Language-specific conventions""",
+
+    "creative": """You are DeckChat Pro - Creative Partner.
+Help users with:
+- Story writing
+- Poetry
+- Creative ideas
+- Brainstorming
+- Artistic concepts
+Be imaginative and inspiring!""",
+
+    "academic": """You are DeckChat Pro - Academic Tutor.
+Provide:
+- Detailed explanations
+- Step-by-step reasoning
+- Citations when relevant
+- Study tips
+- Clear examples
+Make complex topics accessible!"""
+}
 
 # ----------------------
 # Helper Functions
@@ -862,346 +592,603 @@ def load_gif_base64(gif_path="neon_star_animated.gif"):
         with open(gif_path, "rb") as f:
             data = base64.b64encode(f.read()).decode("utf-8")
         return f"data:image/gif;base64,{data}"
-    except:
+    except FileNotFoundError:
+        # Return None if file not found (will use text fallback)
         return None
 
-def format_time(dt):
-    """Format time for display"""
-    if not dt:
-        return ""
-    
-    if isinstance(dt, str):
-        try:
-            dt = datetime.fromisoformat(dt.replace('Z', '+00:00'))
-        except:
-            return dt
-    
-    if isinstance(dt, datetime):
+def format_timestamp(timestamp):
+    """Format timestamp for display"""
+    if isinstance(timestamp, datetime):
         now = datetime.utcnow()
-        if dt.date() == now.date():
-            return dt.strftime("%I:%M %p")
-        elif dt.date() == (now - timedelta(days=1)).date():
+        diff = now - timestamp
+        
+        if diff.days == 0:
+            if diff.seconds < 60:
+                return "Just now"
+            elif diff.seconds < 3600:
+                return f"{diff.seconds // 60} minutes ago"
+            else:
+                return f"{diff.seconds // 3600} hours ago"
+        elif diff.days == 1:
             return "Yesterday"
+        elif diff.days < 7:
+            return f"{diff.days} days ago"
         else:
-            return dt.strftime("%d %b %Y")
+            return timestamp.strftime("%Y-%m-%d")
     
-    return str(dt)
+    return "Unknown"
+
+def export_chat_history(messages: List[Dict], format: str = "txt"):
+    """Export chat history in various formats"""
+    if format == "txt":
+        content = ""
+        for msg in messages:
+            timestamp = msg.get('timestamp', '')
+            role = msg['role'].upper()
+            content_text = msg['content']
+            content += f"[{timestamp}] {role}:\n{content_text}\n\n{'='*50}\n\n"
+        return content
+    
+    elif format == "json":
+        return json.dumps(messages, indent=2, default=str)
+    
+    elif format == "md":
+        content = "# Chat Export\n\n"
+        for msg in messages:
+            timestamp = msg.get('timestamp', '')
+            role = msg['role']
+            content_text = msg['content']
+            content += f"## {role.capitalize()} - {timestamp}\n\n{content_text}\n\n---\n\n"
+        return content
+    
+    return ""
 
 # ----------------------
 # Authentication Screen
 # ----------------------
 def show_auth_screen():
-    """Display login/signup interface"""
+    """Display enhanced login/signup interface"""
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
+        # Animated header with GIF
         gif_url = load_gif_base64()
         
-        st.markdown(f"""
-        <div style='text-align: center; margin: 60px 0 40px;'>
-            {'<img src="' + gif_url + '" style="width: 100px; margin-bottom: 20px;">' if gif_url else '✨'}
-            <h1 style='font-size: 48px; font-weight: 700; 
-                      background: linear-gradient(135deg, #2563eb, #7c3aed);
-                      -webkit-background-clip: text;
-                      -webkit-text-fill-color: transparent;
-                      margin: 0;'>DeckChat Pro</h1>
-            <p style='color: #6b7280; font-size: 18px; margin-top: 12px;'>
-                Your intelligent conversation partner
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+        if gif_url:
+            st.markdown(f"""
+            <div style='text-align: center; margin-bottom: 40px; animation: fadeIn 1s;'>
+                <img src="{gif_url}" style="width: 100px; height: 100px; margin-bottom: 20px;">
+                <h1 style='background: linear-gradient(120deg, #667eea, #764ba2); 
+                          -webkit-background-clip: text; 
+                          -webkit-text-fill-color: transparent;
+                          font-size: 48px; margin: 0;'>DeckChat Pro</h1>
+                <p style='color: #666; font-size: 18px;'>Your Intelligent AI Companion</p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style='text-align: center; margin-bottom: 40px;'>
+                <h1 style='color: #667eea; font-size: 48px;'>✨ DeckChat Pro</h1>
+                <p style='color: #666; font-size: 18px;'>Your Intelligent AI Companion</p>
+            </div>
+            """, unsafe_allow_html=True)
         
-        tab1, tab2 = st.tabs(["Login", "Sign Up"])
+        # Create tabs for login/signup
+        tab1, tab2 = st.tabs(["🔐 Login", "📝 Sign Up"])
         
         with tab1:
-            with st.form("login_form"):
-                email = st.text_input("Email", placeholder="Enter your email")
-                password = st.text_input("Password", type="password", placeholder="Enter your password")
+            with st.form("login_form", clear_on_submit=True):
+                email = st.text_input(
+                    "📧 Email Address",
+                    placeholder="Enter your email",
+                    help="We'll never share your email"
+                )
                 
-                if st.form_submit_button("Login", use_container_width=True, type="primary"):
+                password = st.text_input(
+                    "🔑 Password",
+                    type="password",
+                    placeholder="Enter your password"
+                )
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    submit = st.form_submit_button(
+                        "Login",
+                        use_container_width=True,
+                        type="primary"
+                    )
+                
+                with col2:
+                    if st.form_submit_button("Reset Password", use_container_width=True):
+                        st.info("Password reset feature coming soon!")
+                
+                if submit:
                     if email and password:
-                        success, msg = sign_in(email, password)
-                        if success:
-                            st.session_state.authenticated = True
-                            st.session_state.user_email = email
-                            st.session_state.current_session = create_session(email, "New Chat")
-                            st.session_state.sessions = get_user_sessions(email)
-                            st.session_state.messages = []
-                            st.rerun()
-                        else:
-                            st.error(msg)
+                        with st.spinner("🔄 Authenticating..."):
+                            success, message = sign_in(email, password)
+                            
+                            if success:
+                                st.session_state.authenticated = True
+                                st.session_state.user_email = email
+                                st.session_state.messages = []
+                                st.session_state.current_model = "base"
+                                st.success(f"✅ {message}")
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {message}")
                     else:
-                        st.warning("Please fill all fields")
+                        st.warning("⚠️ Please fill in all fields")
         
         with tab2:
-            with st.form("signup_form"):
-                new_email = st.text_input("Email", placeholder="Enter your email")
-                new_password = st.text_input("Password", type="password", placeholder="Create password")
-                confirm = st.text_input("Confirm Password", type="password", placeholder="Confirm password")
+            with st.form("signup_form", clear_on_submit=True):
+                new_email = st.text_input(
+                    "📧 Email Address",
+                    placeholder="Enter your email",
+                    key="signup_email"
+                )
                 
-                if st.form_submit_button("Create Account", use_container_width=True, type="primary"):
-                    if new_email and new_password and confirm:
-                        if new_password == confirm:
+                col1, col2 = st.columns(2)
+                with col1:
+                    new_password = st.text_input(
+                        "🔑 Password",
+                        type="password",
+                        placeholder="Create password",
+                        help="Minimum 6 characters"
+                    )
+                
+                with col2:
+                    confirm_password = st.text_input(
+                        "🔒 Confirm Password",
+                        type="password",
+                        placeholder="Confirm password"
+                    )
+                
+                # Terms and conditions
+                terms = st.checkbox(
+                    "I agree to the Terms of Service and Privacy Policy",
+                    help="Read our terms before signing up"
+                )
+                
+                submit = st.form_submit_button(
+                    "Create Account",
+                    use_container_width=True,
+                    type="primary"
+                )
+                
+                if submit:
+                    if new_email and new_password and confirm_password:
+                        if new_password == confirm_password:
                             if len(new_password) >= 6:
-                                success, msg = sign_up(new_email, new_password)
-                                if success:
-                                    st.success("Account created! Please login.")
+                                if terms:
+                                    with st.spinner("🔄 Creating account..."):
+                                        success, message = sign_up(new_email, new_password)
+                                        
+                                        if success:
+                                            st.success(f"✅ {message}")
+                                            st.balloons()
+                                            st.info("Please login with your new account")
+                                        else:
+                                            st.error(f"❌ {message}")
                                 else:
-                                    st.error(msg)
+                                    st.warning("⚠️ Please accept the terms to continue")
                             else:
-                                st.error("Password must be at least 6 characters")
+                                st.error("❌ Password must be at least 6 characters")
                         else:
-                            st.error("Passwords don't match")
+                            st.error("❌ Passwords don't match")
                     else:
-                        st.warning("Please fill all fields")
+                        st.warning("⚠️ Please fill in all fields")
+
+# ----------------------
+# Settings Modal
+# ----------------------
+def show_settings_modal():
+    """Display settings modal"""
+    with st.expander("⚙️ Settings", expanded=False):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("🎨 Appearance")
+            theme = st.selectbox(
+                "Theme",
+                options=["Light", "Dark", "System"],
+                index=0
+            )
+            
+            font_size = st.slider(
+                "Font Size",
+                min_value=12,
+                max_value=24,
+                value=16
+            )
+        
+        with col2:
+            st.subheader("🤖 AI Settings")
+            temperature = st.slider(
+                "Temperature",
+                min_value=0.0,
+                max_value=2.0,
+                value=0.7,
+                step=0.1,
+                help="Higher = more creative, Lower = more focused"
+            )
+            
+            max_tokens = st.number_input(
+                "Max Tokens",
+                min_value=100,
+                max_value=4000,
+                value=2000,
+                step=100
+            )
+        
+        # Save preferences
+        if st.button("💾 Save Settings", use_container_width=True):
+            preferences = {
+                'theme': theme.lower(),
+                'font_size': font_size,
+                'temperature': temperature,
+                'max_tokens': max_tokens
+            }
+            
+            if update_user_preferences(st.session_state.user_email, preferences):
+                st.success("✅ Settings saved!")
+                st.session_state.preferences = preferences
+            else:
+                st.error("❌ Failed to save settings")
 
 # ----------------------
 # Main Chat Interface
 # ----------------------
 def show_chat_interface():
-    """Display main chat interface"""
+    """Display enhanced main chat interface"""
     
     # Load CSS
     load_css()
     
-    # Initialize models
-    if 'base_model' not in st.session_state:
-        st.session_state.base_model = init_openrouter_model()
-    if 'pro_model' not in st.session_state:
-        st.session_state.pro_model = init_groq_model()
+    # Initialize model based on selection
     if 'current_model' not in st.session_state:
         st.session_state.current_model = "base"
     
-    # Initialize sessions
-    if 'sessions' not in st.session_state:
-        st.session_state.sessions = get_user_sessions(st.session_state.user_email)
+    # Initialize models
+    if 'base_model' not in st.session_state:
+        with st.spinner("🚀 Initializing Base Model (GPT-3.5)..."):
+            st.session_state.base_model = init_openrouter_model("openai/gpt-3.5-turbo")
     
-    if 'current_session' not in st.session_state:
-        if not st.session_state.sessions:
-            session_id = create_session(st.session_state.user_email, "New Chat")
-            st.session_state.current_session = session_id
-            st.session_state.sessions = get_user_sessions(st.session_state.user_email)
-        else:
-            st.session_state.current_session = st.session_state.sessions[0]['session_id']
+    if 'pro_model' not in st.session_state:
+        with st.spinner("🚀 Initializing Pro Model (Llama-3-70B)..."):
+            st.session_state.pro_model = init_groq_model()
     
-    if 'messages' not in st.session_state:
-        st.session_state.messages = get_session_messages(
-            st.session_state.user_email, 
-            st.session_state.current_session
-        )
+    # Load chat history
+    if 'messages' not in st.session_state or not st.session_state.messages:
+        with st.spinner("📚 Loading your conversations..."):
+            st.session_state.messages = get_chat_history(st.session_state.user_email)
+    
+    # Load preferences
+    if 'preferences' not in st.session_state:
+        stats = get_user_stats(st.session_state.user_email)
+        st.session_state.preferences = stats.get('preferences', {})
     
     # Sidebar
     with st.sidebar:
-        st.markdown("""
-        <div class='sidebar-header'>
-            <h2 style='margin:0; font-size:24px; font-weight:600; 
-                      background: linear-gradient(135deg, #2563eb, #7c3aed);
-                      -webkit-background-clip: text;
-                      -webkit-text-fill-color: transparent;'>DeckChat Pro</h2>
+        # User Profile Section
+        stats = get_user_stats(st.session_state.user_email)
+        
+        st.markdown(f"""
+        <div class='user-profile fade-in'>
+            <div style='font-size: 48px; margin-bottom: 10px;'>
+                {st.session_state.user_email[0].upper()}
+            </div>
+            <h3 style='margin: 0;'>{st.session_state.user_email.split('@')[0]}</h3>
+            <p style='opacity: 0.8; margin: 5px 0;'>{st.session_state.user_email}</p>
+            <div style='display: flex; justify-content: center; gap: 20px; margin-top: 15px;'>
+                <div class='stat-card'>
+                    <div style='font-size: 24px; font-weight: bold;'>{stats['total_messages']}</div>
+                    <div style='font-size: 12px;'>Total Msgs</div>
+                </div>
+                <div class='stat-card'>
+                    <div style='font-size: 24px; font-weight: bold;'>{stats['today_messages']}</div>
+                    <div style='font-size: 12px;'>Today</div>
+                </div>
+            </div>
         </div>
         """, unsafe_allow_html=True)
         
-        # New Chat button
-        if st.button("➕ New Chat", key="new_chat", use_container_width=True):
-            session_id = create_session(st.session_state.user_email, "New Chat")
-            st.session_state.current_session = session_id
-            st.session_state.messages = []
-            st.session_state.sessions = get_user_sessions(st.session_state.user_email)
+        st.divider()
+        
+        # Model Selection
+        st.subheader("🤖 Model Selection")
+        
+        model_option = st.radio(
+            "Choose your AI model:",
+            options=[
+                "Base (GPT-3.5) - Fast & Efficient",
+                "Pro (Llama-3-70B) - Most Capable"
+            ],
+            index=0 if st.session_state.current_model == "base" else 1,
+            help="Base: GPT-3.5 | Pro: Llama-3-70B"
+        )
+        
+        # Update current model
+        new_model = "base" if "Base" in model_option else "pro"
+        if new_model != st.session_state.current_model:
+            st.session_state.current_model = new_model
             st.rerun()
         
-        # Model selector
-        st.markdown("### Model")
+        st.divider()
+        
+        # System Prompt Selection
+        st.subheader("🎯 Assistant Persona")
+        
+        persona = st.selectbox(
+            "Choose persona:",
+            options=list(SYSTEM_PROMPTS.keys()),
+            format_func=lambda x: x.capitalize(),
+            help="Different personas for different tasks"
+        )
+        
+        st.session_state.current_persona = persona
+        
+        st.divider()
+        
+        # Chat Actions
+        st.subheader("⚡ Quick Actions")
+        
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("⚡ Base", key="base_model_btn", use_container_width=True,
-                        type="primary" if st.session_state.current_model == "base" else "secondary"):
-                st.session_state.current_model = "base"
+            if st.button("🔄 New Chat", use_container_width=True):
+                st.session_state.messages = []
                 st.rerun()
+        
         with col2:
-            if st.button("🚀 Pro", key="pro_model_btn", use_container_width=True,
-                        type="primary" if st.session_state.current_model == "pro" else "secondary"):
-                st.session_state.current_model = "pro"
+            if st.button("📊 Stats", use_container_width=True):
+                st.session_state.show_stats = not st.session_state.get('show_stats', False)
+        
+        # Export options
+        export_format = st.selectbox(
+            "Export format:",
+            options=["txt", "md", "json"],
+            format_func=lambda x: x.upper()
+        )
+        
+        if st.button("📥 Export Chat", use_container_width=True):
+            if st.session_state.messages:
+                content = export_chat_history(st.session_state.messages, export_format)
+                st.download_button(
+                    "⬇️ Download",
+                    content,
+                    f"chat_export.{export_format}",
+                    use_container_width=True
+                )
+        
+        st.divider()
+        
+        # Search
+        st.subheader("🔍 Search Conversations")
+        search_query = st.text_input("Search...", placeholder="Enter keywords...")
+        
+        if search_query:
+            with st.spinner("Searching..."):
+                results = search_conversations(st.session_state.user_email, search_query)
+                if results:
+                    st.info(f"Found {len(results)} results")
+                    for i, result in enumerate(results[:5]):
+                        with st.expander(f"{result['role']} - {result.get('timestamp', '')[:10]}"):
+                            st.write(result['content'][:200] + "...")
+                else:
+                    st.info("No results found")
+        
+        st.divider()
+        
+        # Danger Zone
+        with st.expander("⚠️ Danger Zone"):
+            st.warning("These actions cannot be undone!")
+            
+            if st.button("🗑️ Clear All History", use_container_width=True, type="primary"):
+                if clear_user_history(st.session_state.user_email):
+                    st.session_state.messages = []
+                    st.success("History cleared!")
+                    st.rerun()
+                else:
+                    st.error("Failed to clear history")
+            
+            if st.button("🚪 Logout", use_container_width=True):
+                for key in ['authenticated', 'user_email', 'messages', 'base_model', 'pro_model']:
+                    if key in st.session_state:
+                        del st.session_state[key]
                 st.rerun()
         
-        st.markdown("<hr class='divider'>", unsafe_allow_html=True)
+        st.divider()
         
-        # Chat sessions
-        st.markdown("### Chats")
-        
-        for session in st.session_state.sessions:
-            is_active = session['session_id'] == st.session_state.current_session
-            title = session.get('title', 'New Chat')
-            created = format_time(session.get('created_at'))
-            
-            cols = st.columns([1, 8, 1])
-            with cols[0]:
-                st.markdown("💬")
-            with cols[1]:
-                if st.button(
-                    f"{title[:25]}..." if len(title) > 25 else title,
-                    key=f"session_{session['session_id']}",
-                    use_container_width=True,
-                    type="primary" if is_active else "secondary"
-                ):
-                    st.session_state.current_session = session['session_id']
-                    st.session_state.messages = get_session_messages(
-                        st.session_state.user_email,
-                        session['session_id']
-                    )
-                    st.rerun()
-            with cols[2]:
-                if st.button("×", key=f"del_{session['session_id']}"):
-                    delete_session(st.session_state.user_email, session['session_id'])
-                    if session['session_id'] == st.session_state.current_session:
-                        # Find another session or create new
-                        remaining = get_user_sessions(st.session_state.user_email)
-                        if remaining:
-                            st.session_state.current_session = remaining[0]['session_id']
-                            st.session_state.messages = get_session_messages(
-                                st.session_state.user_email, 
-                                remaining[0]['session_id']
-                            )
-                        else:
-                            new_id = create_session(st.session_state.user_email, "New Chat")
-                            st.session_state.current_session = new_id
-                            st.session_state.messages = []
-                    st.session_state.sessions = get_user_sessions(st.session_state.user_email)
-                    st.rerun()
-            
-            if created:
-                st.caption(f"  {created}")
-        
-        st.markdown("<hr class='divider'>", unsafe_allow_html=True)
-        
-        # User info
-        stats = get_user_stats(st.session_state.user_email)
-        st.markdown(f"""
-        <div style='padding: 16px; background-color: #f9fafb; border-radius: 12px;'>
-            <div style='font-weight:600; color:#1f2937;'>{st.session_state.user_email}</div>
-            <div style='display: flex; gap: 16px; margin-top: 8px; color:#6b7280; font-size:12px;'>
-                <span>💬 {stats['total_messages']} msgs</span>
-                <span>📁 {len(st.session_state.sessions)} chats</span>
-            </div>
+        # Footer
+        st.markdown("""
+        <div style='text-align: center; color: #666; font-size: 12px; padding: 10px;'>
+            <p>Made with ❤️ by DeckChat Team</p>
+            <p>📧 theconsciouschirag@gmail.com</p>
+            <p>v2.0.0</p>
         </div>
         """, unsafe_allow_html=True)
-        
-        # Logout
-        if st.button("🚪 Logout", use_container_width=True):
-            st.session_state.clear()
-            st.rerun()
     
-    # Main chat area
-    gif_url = load_gif_base64()
+    # Main Chat Area
+    col1, col2 = st.columns([1, 20])
     
-    # Welcome screen if no messages
-    if not st.session_state.messages:
-        st.markdown(f"""
-        <div class='welcome-container'>
-            {'<img src="' + gif_url + '" class="welcome-icon" style="width:80px;">' if gif_url else '✨'}
-            <h1 class='welcome-title'>Welcome to DeckChat Pro</h1>
-            <p class='welcome-subtitle'>
-                Ask me anything! I'm here to help with coding, questions, creative tasks, and more.
-            </p>
-            <div class='suggestion-chips'>
-                <div class='chip' onclick="document.querySelector('input[type=text]').value='What is machine learning?'; document.querySelector('button[type=submit]').click();">🤖 What is machine learning?</div>
-                <div class='chip' onclick="document.querySelector('input[type=text]').value='Write a Python function to reverse a string'; document.querySelector('button[type=submit]').click();">🐍 Write Python code</div>
-                <div class='chip' onclick="document.querySelector('input[type=text]').value='Explain quantum computing simply'; document.querySelector('button[type=submit]').click();">⚛️ Explain quantum computing</div>
-                <div class='chip' onclick="document.querySelector('input[type=text]').value='Tell me a joke'; document.querySelector('button[type=submit]').click();">😄 Tell me a joke</div>
-            </div>
-        </div>
+    with col1:
+        gif_url = load_gif_base64()
+        if gif_url:
+            st.markdown(
+                f"""
+                <img src="{gif_url}" 
+                style="width: 50px; height: 50px; object-fit: contain; 
+                       animation: spin 10s linear infinite;">
+                <style>
+                @keyframes spin {{
+                    from {{ transform: rotate(0deg); }}
+                    to {{ transform: rotate(360deg); }}
+                }}
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+    
+    with col2:
+        st.markdown("""
+        <h1 style='background: linear-gradient(120deg, #667eea, #764ba2); 
+                   -webkit-background-clip: text; 
+                   -webkit-text-fill-color: transparent;
+                   margin: 0;'>DeckChat Pro</h1>
         """, unsafe_allow_html=True)
-        
-        # Hidden input handler for chips
-        prompt = st.chat_input("Ask me anything...")
-        
-    else:
-        # Display messages
-        for message in st.session_state.messages:
-            is_user = message['role'] == 'user'
-            avatar = "🧑" if is_user else "✨"
-            avatar_class = "user-avatar" if is_user else "assistant-avatar"
-            message_class = "user-message" if is_user else "assistant-message"
-            
-            # Use st.chat_message for proper markdown rendering
-            with st.chat_message("user" if is_user else "assistant", avatar=avatar):
-                st.markdown(message['content'])
-                if message.get('timestamp'):
-                    st.caption(f"🕒 {message['timestamp']} | 🤖 {message.get('model_used', 'unknown')}")
-        
-        # Chat input
-        prompt = st.chat_input("Ask me anything...")
     
-    # Handle prompt
+    # Status indicators
+    model_status = "🟢 Base Model (GPT-3.5)" if st.session_state.current_model == "base" else "🟢 Pro Model (Llama-3-70B)"
+    st.caption(f"{model_status} | Persona: {persona.capitalize()}")
+    
+    # Settings
+    show_settings_modal()
+    
+    # Stats display
+    if st.session_state.get('show_stats', False):
+        with st.expander("📊 Chat Statistics", expanded=True):
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Messages", stats['total_messages'])
+            with col2:
+                st.metric("Today", stats['today_messages'])
+            with col3:
+                st.metric("Avg/Session", stats['avg_messages_per_session'])
+            with col4:
+                st.metric("Sessions", stats['total_sessions'])
+    
+    # Display chat messages
+    for msg in st.session_state.messages:
+        with st.chat_message(
+            msg['role'],
+            avatar="🧑" if msg['role'] == 'user' else "✨"
+        ):
+            st.markdown(msg['content'])
+            
+            # Show metadata if available
+            if msg.get('timestamp'):
+                st.caption(f"🕒 {msg['timestamp']} | 🤖 {msg.get('model_used', 'unknown')}")
+    
+    # Chat input
+    prompt = st.chat_input("Type your message here...")
+    
     if prompt:
         # Get current model
         current_model = st.session_state.pro_model if st.session_state.current_model == "pro" else st.session_state.base_model
         
         if not current_model:
-            st.error("Model not available. Please check API keys.")
+            st.error("❌ Selected model is not available. Please try refreshing.")
             return
         
         # Display user message
         with st.chat_message("user", avatar="🧑"):
             st.markdown(prompt)
         
-        # Save user message
-        st.session_state.messages.append({'role': 'user', 'content': prompt})
+        # Add to session
+        st.session_state.messages.append({
+            "role": "user",
+            "content": prompt
+        })
+        
+        # Save to database
         save_message(
             st.session_state.user_email,
-            st.session_state.current_session,
-            'user',
+            "user",
             prompt,
-            'gpt-3.5' if st.session_state.current_model == 'base' else 'llama-3-70b'
+            "gpt-3.5" if st.session_state.current_model == "base" else "llama-3-70b"
         )
         
         # Prepare messages for model
-        messages_for_model = [SystemMessage(content=SYSTEM_PROMPT)]
+        system_prompt = SYSTEM_PROMPTS.get(
+            st.session_state.get('current_persona', 'default'),
+            SYSTEM_PROMPTS['default']
+        )
         
-        # Add conversation context
-        for msg in st.session_state.messages[-10:]:  # Last 10 for context
+        messages_for_model = [SystemMessage(content=system_prompt)]
+        
+        # Add conversation context (last 15 messages for performance)
+        for msg in st.session_state.messages[-15:-1]:
             if msg['role'] == 'user':
                 messages_for_model.append(HumanMessage(content=msg['content']))
             else:
                 messages_for_model.append(AIMessage(content=msg['content']))
         
-        # Generate response
+        # Add current prompt
+        messages_for_model.append(HumanMessage(content=prompt))
+        
+        # Generate response with streaming
         with st.chat_message("assistant", avatar="✨"):
             message_placeholder = st.empty()
             full_response = ""
             
             try:
-                # Stream response
-                for chunk in current_model.stream(messages_for_model):
-                    if hasattr(chunk, 'content'):
-                        full_response += chunk.content
-                        message_placeholder.markdown(full_response + "▌")
-                
-                # Final response
-                message_placeholder.markdown(full_response)
-                
-                # Save assistant message
-                st.session_state.messages.append({
-                    'role': 'assistant',
-                    'content': full_response,
-                    'timestamp': datetime.utcnow().strftime("%I:%M %p"),
-                    'model_used': 'gpt-3.5' if st.session_state.current_model == 'base' else 'llama-3-70b'
-                })
-                
-                save_message(
-                    st.session_state.user_email,
-                    st.session_state.current_session,
-                    'assistant',
-                    full_response,
-                    'gpt-3.5' if st.session_state.current_model == 'base' else 'llama-3-70b'
-                )
-                
-                # Update sessions list
-                st.session_state.sessions = get_user_sessions(st.session_state.user_email)
-                
+                # Show typing indicator
+                with st.spinner(""):
+                    # Stream response
+                    for chunk in current_model.stream(messages_for_model):
+                        if hasattr(chunk, 'content'):
+                            full_response += chunk.content
+                            message_placeholder.markdown(full_response + "▌")
+                    
+                    # Final response
+                    message_placeholder.markdown(full_response)
+                    
+                    # Add to session
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": full_response,
+                        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                        "model_used": "gpt-3.5" if st.session_state.current_model == "base" else "llama-3-70b"
+                    })
+                    
+                    # Save to database
+                    save_message(
+                        st.session_state.user_email,
+                        "assistant",
+                        full_response,
+                        "gpt-3.5" if st.session_state.current_model == "base" else "llama-3-70b"
+                    )
+                    
             except Exception as e:
-                message_placeholder.error(f"Error: {str(e)}")
+                error_msg = f"❌ Error: {str(e)}"
+                message_placeholder.error(error_msg)
+                
+                # Add error message to session
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": error_msg,
+                    "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                    "model_used": "error"
+                })
         
-        st.rerun()
+        # Scroll to bottom (using JavaScript)
+        st.markdown(
+            """
+            <script>
+                var element = document.documentElement;
+                element.scrollTop = element.scrollHeight;
+            </script>
+            """,
+            unsafe_allow_html=True
+        )
+    
+    # Footer with GIF
+    gif_url = load_gif_base64()
+    if gif_url:
+        st.markdown(
+            f"""
+            <div style='display: flex; align-items: center; gap: 10px; 
+                        justify-content: center; margin-top: 30px;'>
+                <img src="{gif_url}" style="width: 30px; height: 30px;">
+                <p style='color: #666;'>DeckChat Pro - Powered by Advanced AI</p>
+                <img src="{gif_url}" style="width: 30px; height: 30px;">
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        st.caption("✨ DeckChat Pro - Your Intelligent AI Companion")
 
 # ----------------------
 # Main App
