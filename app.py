@@ -13,7 +13,7 @@ import pandas as pd
 import pytz
 IST = pytz.timezone("Asia/Kolkata")
 
-# LangChain imports
+# LangChain imports - FIXED: removed "classic"
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from langchain_classic.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
