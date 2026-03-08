@@ -1,649 +1,1258 @@
-# app.py - DeckChat Advanced AI with OpenRouter (Base & Pro Tiers)
+# app.py - DeckChat Pro with OpenRouter & Dual Models
+# A premium AI chatbot experience with Firebase backend
 
 import streamlit as st
 import os
 import json
 import hashlib
 import base64
+import time
 from datetime import datetime
-from openai import OpenAI
+from typing import List, Dict, Optional
+import pandas as pd
+
+# LangChain imports
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_openai import ChatOpenAI
+from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+from langchain.callbacks.base import BaseCallbackHandler
+
+# Firebase
 import firebase_admin
 from firebase_admin import credentials, firestore
+
+# For better streaming
+from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 # ----------------------
 # Page Configuration
 # ----------------------
 st.set_page_config(
-    page_title="DeckChat",
-    page_icon="✦",
+    page_title="DeckChat Pro",
+    page_icon="✨",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': 'https://github.com/yourusername/deckchat',
+        'Report a bug': 'https://github.com/yourusername/deckchat/issues',
+        'About': '# DeckChat Pro\nAdvanced AI Chatbot with Dual Model Support'
+    }
 )
 
 # ----------------------
-# Load CSS
+# Load External CSS
 # ----------------------
 def load_css():
-    css_path = os.path.join(os.path.dirname(__file__), "style.css")
-    if os.path.exists(css_path):
-        with open(css_path, "r") as f:
-            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
-load_css()
+    """Load custom CSS for better UI"""
+    css = """
+    <style>
+        /* Global Styles */
+        .stApp {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .main > div {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 20px;
+            margin: 10px;
+            backdrop-filter: blur(10px);
+        }
+        
+        /* Chat Messages */
+        .stChatMessage {
+            padding: 1.2rem;
+            border-radius: 20px;
+            margin-bottom: 15px;
+            animation: slideIn 0.3s ease-out;
+            border: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        @keyframes slideIn {
+            from { 
+                opacity: 0; 
+                transform: translateX(-20px);
+            }
+            to { 
+                opacity: 1; 
+                transform: translateX(0);
+            }
+        }
+        
+        /* User Message */
+        [data-testid="chat-message-user"] {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            margin-left: 20%;
+        }
+        
+        /* Assistant Message */
+        [data-testid="chat-message-assistant"] {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            color: #2d3748;
+            margin-right: 20%;
+        }
+        
+        /* Sidebar */
+        .css-1d391kg {
+            background: linear-gradient(180deg, #2d3748 0%, #1a202c 100%);
+        }
+        
+        .sidebar-content {
+            color: white;
+            padding: 20px;
+        }
+        
+        /* User Profile Card */
+        .user-profile {
+            background: linear-gradient(120deg, #667eea 0%, #764ba2 100%);
+            padding: 25px;
+            border-radius: 20px;
+            color: white;
+            margin-bottom: 20px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            animation: glow 2s ease-in-out infinite alternate;
+        }
+        
+        @keyframes glow {
+            from { box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3); }
+            to { box-shadow: 0 10px 40px rgba(102, 126, 234, 0.6); }
+        }
+        
+        /* Stats Cards */
+        .stat-card {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 15px;
+            margin: 10px 0;
+            backdrop-filter: blur(5px);
+            transition: transform 0.3s;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        /* Typing Indicator */
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 20px;
+            margin: 10px 0;
+        }
+        
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            margin: 0 3px;
+            background: #667eea;
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+        
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+        
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-10px); }
+        }
+        
+        /* Input Box */
+        .stTextInput > div > div > input {
+            border-radius: 25px !important;
+            border: 2px solid #667eea !important;
+            padding: 15px 20px !important;
+            font-size: 16px !important;
+            background: white !important;
+        }
+        
+        .stTextInput > div > div > input:focus {
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.3) !important;
+        }
+        
+        /* Buttons */
+        .stButton > button {
+            border-radius: 25px !important;
+            background: linear-gradient(120deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 10px 25px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        
+        .stButton > button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        /* Tabs */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 10px;
+            background: rgba(255,255,255,0.1);
+            padding: 10px;
+            border-radius: 15px;
+        }
+        
+        .stTabs [data-baseweb="tab"] {
+            border-radius: 25px;
+            padding: 10px 20px;
+            font-weight: 600;
+        }
+        
+        /* Code Blocks */
+        pre {
+            border-radius: 10px !important;
+            background: #1e1e2f !important;
+            padding: 15px !important;
+        }
+        
+        /* Animations */
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        /* Hide Streamlit Branding */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 10px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(120deg, #667eea 0%, #764ba2 100%);
+            border-radius: 10px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(120deg, #764ba2 0%, #667eea 100%);
+        }
+    </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
 
 # ----------------------
 # Firebase Setup
 # ----------------------
 @st.cache_resource
 def init_firebase():
+    """Initialize Firebase connection with error handling"""
     try:
         if not firebase_admin._apps:
             if 'FIREBASE_CONFIG' in st.secrets:
-                cred_dict = json.loads(st.secrets['FIREBASE_CONFIG'])
+                try:
+                    # Try to parse as JSON string
+                    cred_dict = json.loads(st.secrets['FIREBASE_CONFIG'])
+                except json.JSONDecodeError:
+                    # If it's already a dict
+                    cred_dict = st.secrets['FIREBASE_CONFIG']
+                
                 cred = credentials.Certificate(cred_dict)
                 firebase_admin.initialize_app(cred)
             else:
-                st.error("⚠️ Firebase configuration not found in secrets")
+                st.warning("⚠️ Firebase configuration not found. Running in local mode.")
                 return None
+        
         return firestore.client()
     except Exception as e:
-        st.error(f"Firebase Error: {e}")
+        st.error(f"⚠️ Firebase connection error: {str(e)}")
         return None
 
-db = init_firebase()
-
 # ----------------------
-# Auth Functions
+# Authentication Functions
 # ----------------------
-def hash_password(password):
+def hash_password(password: str) -> str:
+    """Hash password for secure storage"""
     return hashlib.sha256(password.encode()).hexdigest()
 
-def sign_up(email, password):
+def sign_up(email: str, password: str) -> tuple:
+    """Create new user account"""
     if not db:
-        return "Database connection error"
-    users_ref = db.collection('users')
-    existing = list(users_ref.where('email', '==', email).stream())
-    if existing:
-        return "User already exists"
-    users_ref.add({
-        'email': email,
-        'password_hash': hash_password(password),
-        'created_at': datetime.utcnow().isoformat(),
-        'total_messages': 0,
-        'plan': 'base'
-    })
-    return "success"
-
-def sign_in(email, password):
-    if not db:
-        return False
-    users_ref = db.collection('users')
-    docs = list(users_ref.where('email', '==', email)
-                .where('password_hash', '==', hash_password(password)).stream())
-    return True if docs else False
-
-def get_user_plan(user_email):
-    if not db:
-        return "base"
+        return False, "Database connection error"
+    
     try:
         users_ref = db.collection('users')
-        docs = list(users_ref.where('email', '==', user_email).stream())
+        
+        # Check if user exists
+        existing = list(users_ref.where('email', '==', email).stream())
+        if existing:
+            return False, "User already exists"
+        
+        # Create new user
+        user_data = {
+            'email': email,
+            'password_hash': hash_password(password),
+            'created_at': datetime.utcnow(),
+            'total_messages': 0,
+            'total_sessions': 0,
+            'last_active': datetime.utcnow(),
+            'preferences': {
+                'model': 'base',
+                'theme': 'light',
+                'notifications': True
+            }
+        }
+        
+        users_ref.add(user_data)
+        return True, "Account created successfully!"
+        
+    except Exception as e:
+        return False, f"Error: {str(e)}"
+
+def sign_in(email: str, password: str) -> tuple:
+    """Authenticate user"""
+    if not db:
+        return False, "Database connection error"
+    
+    try:
+        users_ref = db.collection('users')
+        docs = list(users_ref.where('email', '==', email)
+                   .where('password_hash', '==', hash_password(password)).stream())
+        
         if docs:
-            return docs[0].to_dict().get('plan', 'base')
-    except:
-        pass
-    return "base"
+            # Update last active
+            user_ref = users_ref.document(docs[0].id)
+            user_ref.update({
+                'last_active': datetime.utcnow(),
+                'total_sessions': firestore.Increment(1)
+            })
+            return True, "Login successful!"
+        
+        return False, "Invalid credentials"
+        
+    except Exception as e:
+        return False, f"Error: {str(e)}"
 
 # ----------------------
 # Database Functions
 # ----------------------
-def save_message(user_email, role, content, session_id=None):
+def save_message(user_email: str, role: str, content: str, model_used: str = None):
+    """Save message to Firebase with metadata"""
     if db:
         try:
-            db.collection('messages').add({
+            message_data = {
                 'user_email': user_email,
                 'role': role,
                 'content': content,
-                'session_id': session_id or st.session_state.get('session_id', 'default'),
-                'timestamp': datetime.utcnow()
-            })
+                'timestamp': datetime.utcnow(),
+                'model_used': model_used,
+                'tokens': len(content.split())  # Approximate token count
+            }
+            
+            db.collection('messages').add(message_data)
+            
+            # Update user message count
             users_ref = db.collection('users')
             user_docs = list(users_ref.where('email', '==', user_email).stream())
             if user_docs:
-                user_doc = user_docs[0]
-                user_ref = users_ref.document(user_doc.id)
-                current_count = user_doc.to_dict().get('total_messages', 0)
-                user_ref.update({'total_messages': current_count + 1})
+                user_ref = users_ref.document(user_docs[0].id)
+                user_ref.update({
+                    'total_messages': firestore.Increment(1),
+                    'last_active': datetime.utcnow()
+                })
+                    
         except Exception as e:
-            st.warning(f"Save Error: {e}")
+            st.warning(f"⚠️ Could not save message: {str(e)}")
 
-def save_conversation_title(user_email, session_id, title):
-    if db:
-        try:
-            db.collection('conversations').document(f"{user_email}_{session_id}").set({
-                'user_email': user_email,
-                'session_id': session_id,
-                'title': title,
-                'updated_at': datetime.utcnow()
-            }, merge=True)
-        except:
-            pass
-
-def get_conversations(user_email, limit=20):
+def get_chat_history(user_email: str, limit: int = 50) -> List[Dict]:
+    """Get user's chat history with pagination support"""
     if not db:
         return []
+    
     try:
-        docs = db.collection('conversations') \
-                 .where('user_email', '==', user_email) \
+        # Get messages sorted by timestamp
+        docs = db.collection('messages')\
+                 .where('user_email', '==', user_email)\
+                 .order_by('timestamp', direction=firestore.Query.DESCENDING)\
+                 .limit(limit)\
                  .stream()
-        convs = [d.to_dict() for d in docs]
-        convs.sort(key=lambda x: x.get('updated_at', datetime.min), reverse=True)
-        return convs[:limit]
-    except:
-        return []
-
-def get_chat_history(user_email, session_id=None, limit=60):
-    if not db:
-        return []
-    try:
-        query = db.collection('messages').where('user_email', '==', user_email)
-        if session_id:
-            query = query.where('session_id', '==', session_id)
-        docs = query.stream()
-        messages = [{'role': d.to_dict()['role'],
-                     'content': d.to_dict()['content'],
-                     'timestamp': d.to_dict().get('timestamp')}
-                    for d in docs]
-        messages.sort(key=lambda x: x['timestamp'] if x['timestamp'] else datetime.min)
-        return messages[-limit:] if len(messages) > limit else messages
+        
+        messages = []
+        for doc in docs:
+            data = doc.to_dict()
+            messages.append({
+                'role': data['role'],
+                'content': data['content'],
+                'timestamp': data['timestamp'].strftime("%Y-%m-%d %H:%M:%S") if data.get('timestamp') else None,
+                'model_used': data.get('model_used', 'unknown')
+            })
+        
+        # Return in chronological order
+        return list(reversed(messages))
+        
     except Exception as e:
-        st.warning(f"History Error: {e}")
+        st.warning(f"⚠️ Could not load history: {str(e)}")
         return []
 
-def get_user_stats(user_email):
+def get_user_stats(user_email: str) -> Dict:
+    """Get comprehensive user statistics"""
     if not db:
-        return {'total_messages': 0, 'created_at': 'Unknown', 'plan': 'base'}
+        return {
+            'total_messages': 0,
+            'total_sessions': 0,
+            'created_at': 'Unknown',
+            'last_active': 'Unknown',
+            'avg_messages_per_session': 0,
+            'preferences': {}
+        }
+    
     try:
         users_ref = db.collection('users')
         user_docs = list(users_ref.where('email', '==', user_email).stream())
+        
         if user_docs:
             data = user_docs[0].to_dict()
+            
+            # Get message count for today
+            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_messages = list(db.collection('messages')
+                                .where('user_email', '==', user_email)
+                                .where('timestamp', '>=', today_start)
+                                .stream())
+            
+            total_sessions = data.get('total_sessions', 1)
+            total_messages = data.get('total_messages', 0)
+            
             return {
-                'total_messages': data.get('total_messages', 0),
-                'created_at': data.get('created_at', 'Unknown'),
-                'plan': data.get('plan', 'base')
+                'total_messages': total_messages,
+                'total_sessions': total_sessions,
+                'created_at': data.get('created_at', datetime.utcnow()),
+                'last_active': data.get('last_active', datetime.utcnow()),
+                'today_messages': len(today_messages),
+                'avg_messages_per_session': round(total_messages / max(total_sessions, 1), 1),
+                'preferences': data.get('preferences', {})
             }
-    except:
-        pass
-    return {'total_messages': 0, 'created_at': 'Unknown', 'plan': 'base'}
-
-def clear_user_history(user_email, session_id=None):
-    if not db:
-        return
-    try:
-        query = db.collection('messages').where('user_email', '==', user_email)
-        if session_id:
-            query = query.where('session_id', '==', session_id)
-        for doc in query.stream():
-            doc.reference.delete()
+    
     except Exception as e:
-        st.error(f"Clear Error: {e}")
-
-# ----------------------
-# OpenRouter Model Config
-# ----------------------
-MODEL_CONFIG = {
-    "base": {
-        "model": "openai/gpt-3.5-turbo",
-        "label": "Base · GPT-3.5 Turbo",
-        "badge": "BASE",
-        "badge_color": "#4ade80",
-        "description": "Fast & efficient for everyday tasks",
-        "icon": "⚡"
-    },
-    "pro": {
-        "model": "meta-llama/llama-3.3-70b-instruct",
-        "label": "Pro · Llama 3.3 70B",
-        "badge": "PRO",
-        "badge_color": "#a78bfa",
-        "description": "Advanced reasoning & complex tasks",
-        "icon": "🚀"
+        st.warning(f"⚠️ Could not load stats: {str(e)}")
+    
+    return {
+        'total_messages': 0,
+        'total_sessions': 0,
+        'created_at': datetime.utcnow(),
+        'last_active': datetime.utcnow(),
+        'today_messages': 0,
+        'avg_messages_per_session': 0,
+        'preferences': {}
     }
-}
 
-# Available models for pro users to choose from
-PRO_MODELS = {
-    "meta-llama/llama-3.3-70b-instruct": "Llama 3.3 70B (via Groq-fast)",
-    "anthropic/claude-3.5-sonnet": "Claude 3.5 Sonnet",
-    "google/gemini-2.0-flash-001": "Gemini 2.0 Flash",
-    "openai/gpt-4o": "GPT-4o",
-    "deepseek/deepseek-r1": "DeepSeek R1",
-    "mistralai/mixtral-8x7b-instruct": "Mixtral 8x7B",
-}
+def update_user_preferences(user_email: str, preferences: Dict):
+    """Update user preferences"""
+    if db:
+        try:
+            users_ref = db.collection('users')
+            user_docs = list(users_ref.where('email', '==', user_email).stream())
+            if user_docs:
+                user_ref = users_ref.document(user_docs[0].id)
+                user_ref.update({'preferences': preferences})
+                return True
+        except Exception as e:
+            st.warning(f"⚠️ Could not update preferences: {str(e)}")
+    return False
 
-@st.cache_resource
-def get_openrouter_client():
+def clear_user_history(user_email: str):
+    """Clear all chat history for user"""
+    if db:
+        try:
+            batch = db.batch()
+            docs = db.collection('messages').where('user_email', '==', user_email).stream()
+            for doc in docs:
+                batch.delete(doc.reference)
+            batch.commit()
+            return True
+        except Exception as e:
+            st.error(f"❌ Clear Error: {str(e)}")
+    return False
+
+def search_conversations(user_email: str, query: str) -> List[Dict]:
+    """Search through user's chat history"""
+    if not db:
+        return []
+    
     try:
-        api_key = st.secrets.get("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY", ""))
-        if not api_key:
-            st.error("⚠️ OPENROUTER_API_KEY not found in secrets")
-            return None
-        return OpenAI(
-            api_key=api_key,
-            base_url="https://openrouter.ai/api/v1"
-        )
+        # Get all messages and search in memory (Firestore doesn't support text search natively)
+        docs = db.collection('messages')\
+                 .where('user_email', '==', user_email)\
+                 .order_by('timestamp', direction=firestore.Query.DESCENDING)\
+                 .limit(500)\
+                 .stream()
+        
+        results = []
+        for doc in docs:
+            data = doc.to_dict()
+            content = data.get('content', '').lower()
+            if query.lower() in content:
+                results.append({
+                    'role': data['role'],
+                    'content': data['content'],
+                    'timestamp': data['timestamp'].strftime("%Y-%m-%d %H:%M:%S") if data.get('timestamp') else None,
+                    'model_used': data.get('model_used', 'unknown')
+                })
+        
+        return results[:20]  # Return top 20 matches
+        
     except Exception as e:
-        st.error(f"OpenRouter init error: {e}")
+        st.warning(f"⚠️ Search error: {str(e)}")
+        return []
+
+# ----------------------
+# Model Initialization
+# ----------------------
+class StreamHandler(BaseCallbackHandler):
+    """Custom stream handler for better streaming experience"""
+    def __init__(self, container, initial_text=""):
+        self.container = container
+        self.text = initial_text
+        
+    def on_llm_new_token(self, token: str, **kwargs) -> None:
+        self.text += token
+        self.container.markdown(self.text + "▌")
+
+def init_openrouter_model(model_name: str = "openai/gpt-3.5-turbo"):
+    """Initialize OpenRouter model"""
+    try:
+        # Get API key from secrets
+        api_key = st.secrets.get("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY"))
+        
+        if not api_key:
+            st.error("❌ OpenRouter API key not found in secrets")
+            return None
+        
+        # Initialize model
+        model = ChatOpenAI(
+            model=model_name,
+            api_key=api_key,
+            base_url="https://openrouter.ai/api/v1",
+            streaming=True,
+            temperature=0.7,
+            max_tokens=2000,
+            callbacks=[StreamingStdOutCallbackHandler()],
+            default_headers={
+                "HTTP-Referer": "https://deckchat.streamlit.app",
+                "X-Title": "DeckChat Pro"
+            }
+        )
+        return model
+        
+    except Exception as e:
+        st.error(f"❌ Model initialization error: {str(e)}")
         return None
 
-def stream_response(client, model, messages, system_prompt):
-    """Stream response from OpenRouter"""
-    all_messages = [{"role": "system", "content": system_prompt}] + messages
-    response = client.chat.completions.create(
-        model=model,
-        messages=all_messages,
-        stream=True,
-        max_tokens=4096,
-        temperature=0.7,
-        extra_headers={
-            "HTTP-Referer": "https://deckchat.app",
-            "X-Title": "DeckChat"
-        }
-    )
-    for chunk in response:
-        if chunk.choices and chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+def init_groq_model():
+    """Initialize Groq model for pro version"""
+    try:
+        # Get API key from secrets
+        api_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY"))
+        
+        if not api_key:
+            st.error("❌ Groq API key not found in secrets")
+            return None
+        
+        # Initialize Groq model
+        from langchain_groq import ChatGroq
+        
+        model = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            api_key=api_key,
+            temperature=0.7,
+            max_tokens=4000,
+            streaming=True
+        )
+        return model
+        
+    except Exception as e:
+        st.error(f"❌ Groq initialization error: {str(e)}")
+        return None
 
 # ----------------------
-# System Prompt
+# System Prompts
 # ----------------------
-SYSTEM_PROMPT = """You are DeckChat, a highly intelligent and helpful AI assistant.
+SYSTEM_PROMPTS = {
+    "default": """You are DeckChat Pro, an advanced AI assistant created to help users with any task.
+    
+Core Identity:
+- Name: DeckChat Pro
+- Creator: Built with cutting-edge AI technology
+- Purpose: To provide helpful, accurate, and engaging responses
 
-IDENTITY RULES:
-1. If asked about your identity/name/who you are → ALWAYS say: "I am DeckChat, your AI assistant."
-2. NEVER mention Claude, GPT, Gemini, Llama, or any underlying model.
-3. You are DeckChat — that is your only identity.
+Guidelines:
+1. Always identify yourself as "DeckChat Pro" when asked about your identity
+2. Never claim to be another AI system (Claude, GPT, etc.)
+3. Provide comprehensive, well-structured responses
+4. Use markdown formatting for better readability
+5. Be friendly, professional, and empathetic
+6. Acknowledge limitations when appropriate
+7. Encourage follow-up questions
 
-RESPONSE QUALITY:
-- Use markdown formatting: headers, bold, italic, tables, code blocks, lists
-- For code: always use proper syntax-highlighted code blocks with language tags
-- For math: use clear notation
-- For lists: use proper bullet/numbered lists
-- Keep responses well-structured and scannable
-- Be concise yet thorough — quality over quantity
-- Match the user's tone: casual for casual, technical for technical
+Remember: You are DeckChat Pro - helpful, harmless, and honest.""",
 
-PERSONALITY:
-- Warm, helpful, professional
-- Direct and honest
-- Proactively suggest follow-up angles
-- Acknowledge uncertainty honestly"""
+    "code": """You are DeckChat Pro - Code Specialist.
+Focus on providing clean, efficient code solutions with:
+- Proper documentation
+- Best practices
+- Error handling
+- Performance considerations
+- Language-specific conventions""",
+
+    "creative": """You are DeckChat Pro - Creative Partner.
+Help users with:
+- Story writing
+- Poetry
+- Creative ideas
+- Brainstorming
+- Artistic concepts
+Be imaginative and inspiring!""",
+
+    "academic": """You are DeckChat Pro - Academic Tutor.
+Provide:
+- Detailed explanations
+- Step-by-step reasoning
+- Citations when relevant
+- Study tips
+- Clear examples
+Make complex topics accessible!"""
+}
 
 # ----------------------
-# GIF Helper
+# Helper Functions
 # ----------------------
 @st.cache_data
 def load_gif_base64(gif_path="neon_star_animated.gif"):
+    """Load GIF and convert to base64"""
     try:
         with open(gif_path, "rb") as f:
             data = base64.b64encode(f.read()).decode("utf-8")
         return f"data:image/gif;base64,{data}"
-    except:
+    except FileNotFoundError:
+        # Return None if file not found (will use text fallback)
         return None
 
-def new_session_id():
-    return datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+def format_timestamp(timestamp):
+    """Format timestamp for display"""
+    if isinstance(timestamp, datetime):
+        now = datetime.utcnow()
+        diff = now - timestamp
+        
+        if diff.days == 0:
+            if diff.seconds < 60:
+                return "Just now"
+            elif diff.seconds < 3600:
+                return f"{diff.seconds // 60} minutes ago"
+            else:
+                return f"{diff.seconds // 3600} hours ago"
+        elif diff.days == 1:
+            return "Yesterday"
+        elif diff.days < 7:
+            return f"{diff.days} days ago"
+        else:
+            return timestamp.strftime("%Y-%m-%d")
+    
+    return "Unknown"
+
+def export_chat_history(messages: List[Dict], format: str = "txt"):
+    """Export chat history in various formats"""
+    if format == "txt":
+        content = ""
+        for msg in messages:
+            timestamp = msg.get('timestamp', '')
+            role = msg['role'].upper()
+            content_text = msg['content']
+            content += f"[{timestamp}] {role}:\n{content_text}\n\n{'='*50}\n\n"
+        return content
+    
+    elif format == "json":
+        return json.dumps(messages, indent=2, default=str)
+    
+    elif format == "md":
+        content = "# Chat Export\n\n"
+        for msg in messages:
+            timestamp = msg.get('timestamp', '')
+            role = msg['role']
+            content_text = msg['content']
+            content += f"## {role.capitalize()} - {timestamp}\n\n{content_text}\n\n---\n\n"
+        return content
+    
+    return ""
 
 # ----------------------
-# Auth Screen
+# Authentication Screen
 # ----------------------
 def show_auth_screen():
+    """Display enhanced login/signup interface"""
     col1, col2, col3 = st.columns([1, 2, 1])
+    
     with col2:
+        # Animated header with GIF
         gif_url = load_gif_base64()
+        
         if gif_url:
             st.markdown(f"""
-            <div class="auth-header">
-                <img src="{gif_url}" class="auth-logo"/>
-                <h1 class="auth-title">DeckChat</h1>
-                <p class="auth-subtitle">Your Intelligent Conversation Partner</p>
+            <div style='text-align: center; margin-bottom: 40px; animation: fadeIn 1s;'>
+                <img src="{gif_url}" style="width: 100px; height: 100px; margin-bottom: 20px;">
+                <h1 style='background: linear-gradient(120deg, #667eea, #764ba2); 
+                          -webkit-background-clip: text; 
+                          -webkit-text-fill-color: transparent;
+                          font-size: 48px; margin: 0;'>DeckChat Pro</h1>
+                <p style='color: #666; font-size: 18px;'>Your Intelligent AI Companion</p>
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown("""
-            <div class="auth-header">
-                <div class="auth-logo-fallback">✦</div>
-                <h1 class="auth-title">DeckChat</h1>
-                <p class="auth-subtitle">Your Intelligent Conversation Partner</p>
+            <div style='text-align: center; margin-bottom: 40px;'>
+                <h1 style='color: #667eea; font-size: 48px;'>✨ DeckChat Pro</h1>
+                <p style='color: #666; font-size: 18px;'>Your Intelligent AI Companion</p>
             </div>
             """, unsafe_allow_html=True)
-
-        tab1, tab2 = st.tabs(["🔐 Sign In", "📝 Create Account"])
-
+        
+        # Create tabs for login/signup
+        tab1, tab2 = st.tabs(["🔐 Login", "📝 Sign Up"])
+        
         with tab1:
-            with st.form("login_form"):
-                email = st.text_input("Email Address", placeholder="you@email.com")
-                password = st.text_input("Password", type="password", placeholder="Enter password")
-                submit = st.form_submit_button("Sign In →", use_container_width=True)
+            with st.form("login_form", clear_on_submit=True):
+                email = st.text_input(
+                    "📧 Email Address",
+                    placeholder="Enter your email",
+                    help="We'll never share your email"
+                )
+                
+                password = st.text_input(
+                    "🔑 Password",
+                    type="password",
+                    placeholder="Enter your password"
+                )
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    submit = st.form_submit_button(
+                        "Login",
+                        use_container_width=True,
+                        type="primary"
+                    )
+                
+                with col2:
+                    if st.form_submit_button("Reset Password", use_container_width=True):
+                        st.info("Password reset feature coming soon!")
+                
                 if submit:
                     if email and password:
-                        with st.spinner("Authenticating..."):
-                            if sign_in(email, password):
+                        with st.spinner("🔄 Authenticating..."):
+                            success, message = sign_in(email, password)
+                            
+                            if success:
                                 st.session_state.authenticated = True
                                 st.session_state.user_email = email
                                 st.session_state.messages = []
-                                st.session_state.session_id = new_session_id()
-                                st.session_state.plan = get_user_plan(email)
-                                st.session_state.selected_model = MODEL_CONFIG[st.session_state.plan]["model"]
-                                st.success("✔ Welcome back!")
+                                st.session_state.current_model = "base"
+                                st.success(f"✅ {message}")
+                                time.sleep(1)
                                 st.rerun()
                             else:
-                                st.error("❌ Invalid credentials. Please try again.")
+                                st.error(f"❌ {message}")
                     else:
-                        st.warning("⚠️ Please fill all fields")
-
+                        st.warning("⚠️ Please fill in all fields")
+        
         with tab2:
-            with st.form("signup_form"):
-                new_email = st.text_input("Email Address", placeholder="you@email.com", key="su_email")
-                new_password = st.text_input("Password", type="password", placeholder="Min 6 characters", key="su_pass")
-                confirm_password = st.text_input("Confirm Password", type="password", placeholder="Repeat password")
-                submit = st.form_submit_button("Create Account →", use_container_width=True)
+            with st.form("signup_form", clear_on_submit=True):
+                new_email = st.text_input(
+                    "📧 Email Address",
+                    placeholder="Enter your email",
+                    key="signup_email"
+                )
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    new_password = st.text_input(
+                        "🔑 Password",
+                        type="password",
+                        placeholder="Create password",
+                        help="Minimum 6 characters"
+                    )
+                
+                with col2:
+                    confirm_password = st.text_input(
+                        "🔒 Confirm Password",
+                        type="password",
+                        placeholder="Confirm password"
+                    )
+                
+                # Terms and conditions
+                terms = st.checkbox(
+                    "I agree to the Terms of Service and Privacy Policy",
+                    help="Read our terms before signing up"
+                )
+                
+                submit = st.form_submit_button(
+                    "Create Account",
+                    use_container_width=True,
+                    type="primary"
+                )
+                
                 if submit:
                     if new_email and new_password and confirm_password:
-                        if len(new_password) < 6:
-                            st.error("❌ Password must be at least 6 characters")
-                        elif new_password == confirm_password:
-                            result = sign_up(new_email, new_password)
-                            if result == "success":
-                                st.success("✔ Account created! Sign in to continue.")
+                        if new_password == confirm_password:
+                            if len(new_password) >= 6:
+                                if terms:
+                                    with st.spinner("🔄 Creating account..."):
+                                        success, message = sign_up(new_email, new_password)
+                                        
+                                        if success:
+                                            st.success(f"✅ {message}")
+                                            st.balloons()
+                                            st.info("Please login with your new account")
+                                        else:
+                                            st.error(f"❌ {message}")
+                                else:
+                                    st.warning("⚠️ Please accept the terms to continue")
                             else:
-                                st.error(f"❌ {result}")
+                                st.error("❌ Password must be at least 6 characters")
                         else:
                             st.error("❌ Passwords don't match")
                     else:
-                        st.warning("⚠️ Please fill all fields")
+                        st.warning("⚠️ Please fill in all fields")
 
 # ----------------------
-# Chat Interface
+# Settings Modal
+# ----------------------
+def show_settings_modal():
+    """Display settings modal"""
+    with st.expander("⚙️ Settings", expanded=False):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("🎨 Appearance")
+            theme = st.selectbox(
+                "Theme",
+                options=["Light", "Dark", "System"],
+                index=0
+            )
+            
+            font_size = st.slider(
+                "Font Size",
+                min_value=12,
+                max_value=24,
+                value=16
+            )
+        
+        with col2:
+            st.subheader("🤖 AI Settings")
+            temperature = st.slider(
+                "Temperature",
+                min_value=0.0,
+                max_value=2.0,
+                value=0.7,
+                step=0.1,
+                help="Higher = more creative, Lower = more focused"
+            )
+            
+            max_tokens = st.number_input(
+                "Max Tokens",
+                min_value=100,
+                max_value=4000,
+                value=2000,
+                step=100
+            )
+        
+        # Save preferences
+        if st.button("💾 Save Settings", use_container_width=True):
+            preferences = {
+                'theme': theme.lower(),
+                'font_size': font_size,
+                'temperature': temperature,
+                'max_tokens': max_tokens
+            }
+            
+            if update_user_preferences(st.session_state.user_email, preferences):
+                st.success("✅ Settings saved!")
+                st.session_state.preferences = preferences
+            else:
+                st.error("❌ Failed to save settings")
+
+# ----------------------
+# Main Chat Interface
 # ----------------------
 def show_chat_interface():
-    gif_url = load_gif_base64()
-    client = get_openrouter_client()
-
-    # Session defaults
-    if 'session_id' not in st.session_state:
-        st.session_state.session_id = new_session_id()
-    if 'messages' not in st.session_state:
-        st.session_state.messages = []
-    if 'plan' not in st.session_state:
-        st.session_state.plan = get_user_plan(st.session_state.user_email)
-    if 'selected_model' not in st.session_state:
-        st.session_state.selected_model = MODEL_CONFIG[st.session_state.plan]["model"]
-    if 'history_loaded' not in st.session_state:
-        with st.spinner("📚 Loading history..."):
-            st.session_state.messages = get_chat_history(
-                st.session_state.user_email,
-                st.session_state.session_id
-            )
-        st.session_state.history_loaded = True
-
-    # ---- SIDEBAR ----
-    with st.sidebar:
-        # Logo in sidebar
-        if gif_url:
-            st.markdown(f"""
-            <div class="sidebar-logo">
-                <img src="{gif_url}" class="sidebar-gif"/>
-                <span class="sidebar-title">DeckChat</span>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("<div class='sidebar-logo'><span class='sidebar-title'>✦ DeckChat</span></div>",
-                        unsafe_allow_html=True)
-
-        # New Chat button
-        if st.button("＋  New Chat", use_container_width=True, key="new_chat_btn"):
-            st.session_state.session_id = new_session_id()
-            st.session_state.messages = []
-            st.session_state.history_loaded = False
-            st.rerun()
-
-        st.markdown("<hr class='sidebar-divider'/>", unsafe_allow_html=True)
-
-        # Conversation History
-        st.markdown("<div class='sidebar-section-label'>Recent Conversations</div>", unsafe_allow_html=True)
-        conversations = get_conversations(st.session_state.user_email)
-        if conversations:
-            for conv in conversations[:10]:
-                title = conv.get('title', 'Untitled')[:32]
-                sid = conv.get('session_id')
-                is_active = sid == st.session_state.session_id
-                btn_class = "conv-btn-active" if is_active else "conv-btn"
-                if st.button(f"💬 {title}", key=f"conv_{sid}", use_container_width=True):
-                    st.session_state.session_id = sid
-                    st.session_state.messages = get_chat_history(
-                        st.session_state.user_email, sid
-                    )
-                    st.session_state.history_loaded = True
-                    st.rerun()
-        else:
-            st.markdown("<div class='no-convs'>No conversations yet.<br/>Start chatting!</div>",
-                        unsafe_allow_html=True)
-
-        st.markdown("<hr class='sidebar-divider'/>", unsafe_allow_html=True)
-
-        # Model Selection
-        plan = st.session_state.plan
-        cfg = MODEL_CONFIG[plan]
-        st.markdown(f"""
-        <div class='model-badge-box'>
-            <span class='plan-badge' style='background:{cfg["badge_color"]};'>{cfg["badge"]}</span>
-            <span class='model-name'>{cfg["icon"]} {cfg["label"]}</span>
-        </div>
-        """, unsafe_allow_html=True)
-
-        if plan == "pro":
-            selected = st.selectbox(
-                "Choose Model",
-                options=list(PRO_MODELS.keys()),
-                format_func=lambda x: PRO_MODELS[x],
-                index=list(PRO_MODELS.keys()).index(
-                    st.session_state.selected_model
-                    if st.session_state.selected_model in PRO_MODELS else list(PRO_MODELS.keys())[0]
-                ),
-                key="model_selector"
-            )
-            st.session_state.selected_model = selected
-        else:
-            st.session_state.selected_model = MODEL_CONFIG["base"]["model"]
-            st.markdown("""
-            <div class='upgrade-hint'>
-                🌟 <b>Upgrade to Pro</b> for access to GPT-4o, Claude, Gemini & more!
-            </div>
-            """, unsafe_allow_html=True)
-
-        st.markdown("<hr class='sidebar-divider'/>", unsafe_allow_html=True)
-
-        # User Stats
+    """Display enhanced main chat interface"""
+    
+    # Load CSS
+    load_css()
+    
+    # Initialize model based on selection
+    if 'current_model' not in st.session_state:
+        st.session_state.current_model = "base"
+    
+    # Initialize models
+    if 'base_model' not in st.session_state:
+        with st.spinner("🚀 Initializing Base Model (GPT-3.5)..."):
+            st.session_state.base_model = init_openrouter_model("openai/gpt-3.5-turbo")
+    
+    if 'pro_model' not in st.session_state:
+        with st.spinner("🚀 Initializing Pro Model (Llama-3-70B)..."):
+            st.session_state.pro_model = init_groq_model()
+    
+    # Load chat history
+    if 'messages' not in st.session_state or not st.session_state.messages:
+        with st.spinner("📚 Loading your conversations..."):
+            st.session_state.messages = get_chat_history(st.session_state.user_email)
+    
+    # Load preferences
+    if 'preferences' not in st.session_state:
         stats = get_user_stats(st.session_state.user_email)
-        username = st.session_state.user_email.split('@')[0]
-        member_since = stats['created_at'][:10] if stats['created_at'] != 'Unknown' else 'Unknown'
-
+        st.session_state.preferences = stats.get('preferences', {})
+    
+    # Sidebar
+    with st.sidebar:
+        # User Profile Section
+        stats = get_user_stats(st.session_state.user_email)
+        
         st.markdown(f"""
-        <div class='user-card'>
-            <div class='user-avatar'>{username[0].upper()}</div>
-            <div class='user-details'>
-                <div class='user-name'>{username}</div>
-                <div class='user-meta'>💬 {stats['total_messages']} messages</div>
-                <div class='user-meta'>📅 Since {member_since}</div>
+        <div class='user-profile fade-in'>
+            <div style='font-size: 48px; margin-bottom: 10px;'>
+                {st.session_state.user_email[0].upper()}
+            </div>
+            <h3 style='margin: 0;'>{st.session_state.user_email.split('@')[0]}</h3>
+            <p style='opacity: 0.8; margin: 5px 0;'>{st.session_state.user_email}</p>
+            <div style='display: flex; justify-content: center; gap: 20px; margin-top: 15px;'>
+                <div class='stat-card'>
+                    <div style='font-size: 24px; font-weight: bold;'>{stats['total_messages']}</div>
+                    <div style='font-size: 12px;'>Total Msgs</div>
+                </div>
+                <div class='stat-card'>
+                    <div style='font-size: 24px; font-weight: bold;'>{stats['today_messages']}</div>
+                    <div style='font-size: 12px;'>Today</div>
+                </div>
             </div>
         </div>
         """, unsafe_allow_html=True)
-
-        st.markdown("<hr class='sidebar-divider'/>", unsafe_allow_html=True)
-
+        
+        st.divider()
+        
+        # Model Selection
+        st.subheader("🤖 Model Selection")
+        
+        model_option = st.radio(
+            "Choose your AI model:",
+            options=[
+                "Base (GPT-3.5) - Fast & Efficient",
+                "Pro (Llama-3-70B) - Most Capable"
+            ],
+            index=0 if st.session_state.current_model == "base" else 1,
+            help="Base: OpenRouter GPT-3.5 | Pro: Groq Llama-3-70B"
+        )
+        
+        # Update current model
+        new_model = "base" if "Base" in model_option else "pro"
+        if new_model != st.session_state.current_model:
+            st.session_state.current_model = new_model
+            st.rerun()
+        
+        st.divider()
+        
+        # System Prompt Selection
+        st.subheader("🎯 Assistant Persona")
+        
+        persona = st.selectbox(
+            "Choose persona:",
+            options=list(SYSTEM_PROMPTS.keys()),
+            format_func=lambda x: x.capitalize(),
+            help="Different personas for different tasks"
+        )
+        
+        st.session_state.current_persona = persona
+        
+        st.divider()
+        
+        # Chat Actions
+        st.subheader("⚡ Quick Actions")
+        
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("🗑️ Clear", use_container_width=True):
-                clear_user_history(st.session_state.user_email, st.session_state.session_id)
+            if st.button("🔄 New Chat", use_container_width=True):
                 st.session_state.messages = []
-                st.success("Cleared!")
                 st.rerun()
+        
         with col2:
-            if st.button("🔄 Refresh", use_container_width=True):
-                st.session_state.messages = get_chat_history(
-                    st.session_state.user_email, st.session_state.session_id
+            if st.button("📊 Stats", use_container_width=True):
+                st.session_state.show_stats = not st.session_state.get('show_stats', False)
+        
+        # Export options
+        export_format = st.selectbox(
+            "Export format:",
+            options=["txt", "md", "json"],
+            format_func=lambda x: x.upper()
+        )
+        
+        if st.button("📥 Export Chat", use_container_width=True):
+            if st.session_state.messages:
+                content = export_chat_history(st.session_state.messages, export_format)
+                st.download_button(
+                    "⬇️ Download",
+                    content,
+                    f"chat_export.{export_format}",
+                    use_container_width=True
                 )
+        
+        st.divider()
+        
+        # Search
+        st.subheader("🔍 Search Conversations")
+        search_query = st.text_input("Search...", placeholder="Enter keywords...")
+        
+        if search_query:
+            with st.spinner("Searching..."):
+                results = search_conversations(st.session_state.user_email, search_query)
+                if results:
+                    st.info(f"Found {len(results)} results")
+                    for i, result in enumerate(results[:5]):
+                        with st.expander(f"{result['role']} - {result.get('timestamp', '')[:10]}"):
+                            st.write(result['content'][:200] + "...")
+                else:
+                    st.info("No results found")
+        
+        st.divider()
+        
+        # Danger Zone
+        with st.expander("⚠️ Danger Zone"):
+            st.warning("These actions cannot be undone!")
+            
+            if st.button("🗑️ Clear All History", use_container_width=True, type="primary"):
+                if clear_user_history(st.session_state.user_email):
+                    st.session_state.messages = []
+                    st.success("History cleared!")
+                    st.rerun()
+                else:
+                    st.error("Failed to clear history")
+            
+            if st.button("🚪 Logout", use_container_width=True):
+                for key in ['authenticated', 'user_email', 'messages', 'base_model', 'pro_model']:
+                    if key in st.session_state:
+                        del st.session_state[key]
                 st.rerun()
-
-        if st.button("🚪 Sign Out", use_container_width=True, type="primary"):
-            st.session_state.clear()
-            st.rerun()
-
+        
+        st.divider()
+        
+        # Footer
         st.markdown("""
-        <div class='sidebar-footer'>
-            <a href='mailto:theconsciouschirag@gmail.com'>📧 Send Feedback</a>
+        <div style='text-align: center; color: #666; font-size: 12px; padding: 10px;'>
+            <p>Made with ❤️ by DeckChat Team</p>
+            <p>📧 theconsciouschirag@gmail.com</p>
+            <p>v2.0.0</p>
         </div>
         """, unsafe_allow_html=True)
-
-    # ---- MAIN CHAT AREA ----
-    # Top header bar
-    current_model_label = PRO_MODELS.get(st.session_state.selected_model, st.session_state.selected_model)
-    if gif_url:
-        st.markdown(f"""
-        <div class='chat-header'>
-            <div class='chat-header-left'>
-                <img src="{gif_url}" class='header-gif'/>
-                <span class='header-title'>DeckChat</span>
-            </div>
-            <div class='chat-header-right'>
-                <span class='header-model-badge'>
-                    {MODEL_CONFIG[plan]["icon"]} {current_model_label}
-                </span>
-            </div>
-        </div>
+    
+    # Main Chat Area
+    col1, col2 = st.columns([1, 20])
+    
+    with col1:
+        gif_url = load_gif_base64()
+        if gif_url:
+            st.markdown(
+                f"""
+                <img src="{gif_url}" 
+                style="width: 50px; height: 50px; object-fit: contain; 
+                       animation: spin 10s linear infinite;">
+                <style>
+                @keyframes spin {{
+                    from {{ transform: rotate(0deg); }}
+                    to {{ transform: rotate(360deg); }}
+                }}
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+    
+    with col2:
+        st.markdown("""
+        <h1 style='background: linear-gradient(120deg, #667eea, #764ba2); 
+                   -webkit-background-clip: text; 
+                   -webkit-text-fill-color: transparent;
+                   margin: 0;'>DeckChat Pro</h1>
         """, unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div class='chat-header'>
-            <div class='chat-header-left'>
-                <span class='header-title'>✦ DeckChat</span>
-            </div>
-            <div class='chat-header-right'>
-                <span class='header-model-badge'>{current_model_label}</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Empty state
-    if not st.session_state.messages:
-        username = st.session_state.user_email.split('@')[0]
-        st.markdown(f"""
-        <div class='empty-state'>
-            <div class='empty-state-icon'>✦</div>
-            <h2 class='empty-state-title'>Hello, {username}! 👋</h2>
-            <p class='empty-state-subtitle'>I'm DeckChat, your AI assistant. How can I help you today?</p>
-            <div class='suggestion-chips'>
-                <div class='chip'>✍️ Help me write something</div>
-                <div class='chip'>💡 Explain a concept</div>
-                <div class='chip'>🐍 Write some code</div>
-                <div class='chip'>📊 Analyze data</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Messages
-    chat_container = st.container()
-    with chat_container:
-        for msg in st.session_state.messages:
-            role = msg['role']
-            content = msg['content']
-            if role == "user":
-                st.markdown(f"""
-                <div class='message-row user-row'>
-                    <div class='message-bubble user-bubble'>{content}</div>
-                    <div class='msg-avatar user-avatar-icon'>👤</div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                with st.chat_message("assistant", avatar="✦"):
-                    st.markdown(content)
-
-    # Chat Input
-    prompt = st.chat_input("Message DeckChat...", key="chat_input")
-
+    
+    # Status indicators
+    model_status = "🟢 Base Model (GPT-3.5)" if st.session_state.current_model == "base" else "🟢 Pro Model (Llama-3-70B)"
+    st.caption(f"{model_status} | Persona: {persona.capitalize()}")
+    
+    # Settings
+    show_settings_modal()
+    
+    # Stats display
+    if st.session_state.get('show_stats', False):
+        with st.expander("📊 Chat Statistics", expanded=True):
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Messages", stats['total_messages'])
+            with col2:
+                st.metric("Today", stats['today_messages'])
+            with col3:
+                st.metric("Avg/Session", stats['avg_messages_per_session'])
+            with col4:
+                st.metric("Sessions", stats['total_sessions'])
+    
+    # Display chat messages
+    for msg in st.session_state.messages:
+        with st.chat_message(
+            msg['role'],
+            avatar="🧑" if msg['role'] == 'user' else "✨"
+        ):
+            st.markdown(msg['content'])
+            
+            # Show metadata if available
+            if msg.get('timestamp'):
+                st.caption(f"🕒 {msg['timestamp']} | 🤖 {msg.get('model_used', 'unknown')}")
+    
+    # Chat input
+    prompt = st.chat_input("Type your message here...")
+    
     if prompt:
-        if not client:
-            st.error("⚠️ OpenRouter client not initialized. Check your API key in secrets.")
+        # Get current model
+        current_model = st.session_state.pro_model if st.session_state.current_model == "pro" else st.session_state.base_model
+        
+        if not current_model:
+            st.error("❌ Selected model is not available. Please try refreshing.")
             return
-
-        # Show user message
-        st.markdown(f"""
-        <div class='message-row user-row'>
-            <div class='message-bubble user-bubble'>{prompt}</div>
-            <div class='msg-avatar user-avatar-icon'>👤</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        save_message(st.session_state.user_email, "user", prompt, st.session_state.session_id)
-
-        # Auto-title conversation from first message
-        if len(st.session_state.messages) == 1:
-            title = prompt[:50] + ("..." if len(prompt) > 50 else "")
-            save_conversation_title(st.session_state.user_email, st.session_state.session_id, title)
-
-        # Build message history for model (last 15 turns)
-        history_for_model = []
-        for m in st.session_state.messages[-16:-1]:
-            history_for_model.append({"role": m["role"], "content": m["content"]})
-        history_for_model.append({"role": "user", "content": prompt})
-
-        # Generate response
-        with st.chat_message("assistant", avatar="✦"):
-            placeholder = st.empty()
+        
+        # Display user message
+        with st.chat_message("user", avatar="🧑"):
+            st.markdown(prompt)
+        
+        # Add to session
+        st.session_state.messages.append({
+            "role": "user",
+            "content": prompt
+        })
+        
+        # Save to database
+        save_message(
+            st.session_state.user_email,
+            "user",
+            prompt,
+            "gpt-3.5" if st.session_state.current_model == "base" else "llama-3-70b"
+        )
+        
+        # Prepare messages for model
+        system_prompt = SYSTEM_PROMPTS.get(
+            st.session_state.get('current_persona', 'default'),
+            SYSTEM_PROMPTS['default']
+        )
+        
+        messages_for_model = [SystemMessage(content=system_prompt)]
+        
+        # Add conversation context (last 15 messages for performance)
+        for msg in st.session_state.messages[-15:-1]:
+            if msg['role'] == 'user':
+                messages_for_model.append(HumanMessage(content=msg['content']))
+            else:
+                messages_for_model.append(AIMessage(content=msg['content']))
+        
+        # Add current prompt
+        messages_for_model.append(HumanMessage(content=prompt))
+        
+        # Generate response with streaming
+        with st.chat_message("assistant", avatar="✨"):
+            message_placeholder = st.empty()
             full_response = ""
+            
             try:
-                for chunk in stream_response(
-                    client,
-                    st.session_state.selected_model,
-                    history_for_model,
-                    SYSTEM_PROMPT
-                ):
-                    full_response += chunk
-                    placeholder.markdown(full_response + "▌")
-                placeholder.markdown(full_response)
-
-                st.session_state.messages.append({"role": "assistant", "content": full_response})
-                save_message(st.session_state.user_email, "assistant", full_response, st.session_state.session_id)
-
+                # Show typing indicator
+                with st.spinner(""):
+                    # Stream response
+                    for chunk in current_model.stream(messages_for_model):
+                        if hasattr(chunk, 'content'):
+                            full_response += chunk.content
+                            message_placeholder.markdown(full_response + "▌")
+                    
+                    # Final response
+                    message_placeholder.markdown(full_response)
+                    
+                    # Add to session
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": full_response,
+                        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                        "model_used": "gpt-3.5" if st.session_state.current_model == "base" else "llama-3-70b"
+                    })
+                    
+                    # Save to database
+                    save_message(
+                        st.session_state.user_email,
+                        "assistant",
+                        full_response,
+                        "gpt-3.5" if st.session_state.current_model == "base" else "llama-3-70b"
+                    )
+                    
             except Exception as e:
-                err = f"❌ Error: {str(e)}\n\nPlease try again or check your API configuration."
-                placeholder.error(err)
-
-    # Footer
+                error_msg = f"❌ Error: {str(e)}"
+                message_placeholder.error(error_msg)
+                
+                # Add error message to session
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": error_msg,
+                    "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                    "model_used": "error"
+                })
+        
+        # Scroll to bottom (using JavaScript)
+        st.markdown(
+            """
+            <script>
+                var element = document.documentElement;
+                element.scrollTop = element.scrollHeight;
+            </script>
+            """,
+            unsafe_allow_html=True
+        )
+    
+    # Footer with GIF
+    gif_url = load_gif_base64()
     if gif_url:
-        st.markdown(f"""
-        <div class='chat-footer'>
-            <img src="{gif_url}" class='footer-gif'/>
-            <span class='footer-text'>DeckChat · Powered by OpenRouter · Your conversations are private</span>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div style='display: flex; align-items: center; gap: 10px; 
+                        justify-content: center; margin-top: 30px;'>
+                <img src="{gif_url}" style="width: 30px; height: 30px;">
+                <p style='color: #666;'>DeckChat Pro - Powered by Advanced AI</p>
+                <img src="{gif_url}" style="width: 30px; height: 30px;">
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
     else:
-        st.markdown("""
-        <div class='chat-footer'>
-            <span class='footer-text'>✦ DeckChat · Powered by OpenRouter · Your conversations are private</span>
-        </div>
-        """, unsafe_allow_html=True)
-
+        st.caption("✨ DeckChat Pro - Your Intelligent AI Companion")
 
 # ----------------------
-# Main
+# Main App
 # ----------------------
 def main():
+    """Main application entry point"""
+    
+    # Initialize session state
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
-
+    
+    # Initialize Firebase
+    global db
+    db = init_firebase()
+    
+    # Route to appropriate screen
     if not st.session_state.authenticated:
         show_auth_screen()
     else:
