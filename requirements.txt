@@ -10,3 +10,7 @@ pydantic-core
 langchain-classic
 langchain-groq
 pytz
+SpeechRecognition
+gTTS
+playsound
+PyAudio
