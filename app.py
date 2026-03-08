@@ -106,7 +106,7 @@ def load_css():
         
         /* User Profile Card */
         .user-profile {
-            background: linear-gradient(90deg,rgba(230, 230, 230, 1) 0%, rgba(255, 255, 255, 1) 48%, rgba(245, 160, 56, 1) 53%, rgba(237, 221, 83, 1) 100%);
+            background: #edb268;
             padding: 25px;
             border-radius: 20px;
             color: white;
@@ -208,7 +208,7 @@ def load_css():
         /* Code Blocks */
         pre {
             border-radius: 10px !important;
-            background: #1e1e2f !important;
+            background: #737ec9 !important;
             padding: 15px !important;
         }
         
