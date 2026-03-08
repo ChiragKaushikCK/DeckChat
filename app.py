@@ -7,13 +7,20 @@ import json
 import hashlib
 import base64
 import time
+import io
+import tempfile
 from datetime import datetime
 from typing import List, Dict, Optional
 import pandas as pd
 import pytz
+
+# Audio Processing Imports
+import speech_recognition as sr
+from gtts import gTTS
+
 IST = pytz.timezone("Asia/Kolkata")
 
-# LangChain imports - FIXED: removed "classic"
+# LangChain imports
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from langchain_classic.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
@@ -25,13 +32,6 @@ from firebase_admin import credentials, firestore
 
 # For better streaming
 from streamlit.runtime.scriptrunner import get_script_run_ctx
-
-# Voice functionality imports
-import speech_recognition as sr
-from gtts import gTTS
-import io
-import base64
-import tempfile
 
 # ----------------------
 # Page Configuration
@@ -200,11 +200,6 @@ def load_css():
             box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
         }
         
-        /* Voice button */
-        .voice-btn {
-            background: linear-gradient(120deg, #ff7e5f, #feb47b) !important;
-        }
-        
         /* Tabs */
         .stTabs [data-baseweb="tab-list"] {
             gap: 10px;
@@ -258,138 +253,44 @@ def load_css():
         ::-webkit-scrollbar-thumb:hover {
             background: linear-gradient(120deg, #764ba2 0%, #667eea 100%);
         }
-        
-        /* Speaker button */
-        .speaker-btn {
-            cursor: pointer;
-            margin-left: 10px;
-            font-size: 18px;
-            opacity: 0.7;
-            transition: opacity 0.2s;
-        }
-        
-        .speaker-btn:hover {
-            opacity: 1;
-        }
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
 
 # ----------------------
-# Voice Functionality
+# Voice & Audio Helpers
 # ----------------------
-def record_audio():
-    """Record audio from microphone and convert to text"""
+def speech_to_text(audio_bytes):
+    """Convert speech to text using Google Speech Recognition"""
+    recognizer = sr.Recognizer()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
+        temp_audio.write(audio_bytes)
+        temp_audio_path = temp_audio.name
+    
     try:
-        r = sr.Recognizer()
-        with sr.Microphone() as source:
-            with st.spinner("🎤 Listening... Speak now"):
-                r.adjust_for_ambient_noise(source, duration=0.5)
-                audio = r.listen(source, timeout=5, phrase_time_limit=10)
-            
-            with st.spinner("📝 Processing..."):
-                text = r.recognize_google(audio)
-                return text, audio
-    except sr.WaitTimeoutError:
-        st.warning("⏰ No speech detected. Please try again.")
-        return None, None
-    except sr.UnknownValueError:
-        st.warning("🤔 Could not understand audio. Please try again.")
-        return None, None
+        with sr.AudioFile(temp_audio_path) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data)
+            return text
     except Exception as e:
-        st.error(f"❌ Voice input error: {str(e)}")
-        return None, None
+        return f"Audio recognition failed: {str(e)}"
+    finally:
+        if os.path.exists(temp_audio_path):
+            os.remove(temp_audio_path)
 
-def text_to_speech_female(text):
-    """Convert text to female voice speech"""
+def text_to_speech(text):
+    """Convert text to speech using gTTS (female AI voice by default for English)"""
     try:
-        # Create gTTS object with female voice (default is female for many languages)
+        # Generate speech
         tts = gTTS(text=text, lang='en', slow=False)
-        
-        # Save to bytes
         fp = io.BytesIO()
         tts.write_to_fp(fp)
         fp.seek(0)
-        
-        # Convert to base64 for HTML5 audio
-        audio_bytes = fp.read()
-        audio_base64 = base64.b64encode(audio_bytes).decode()
-        
-        # Create HTML5 audio element
-        audio_html = f"""
-            <audio autoplay>
-                <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
-            </audio>
-        """
-        return audio_html, audio_bytes
+        # Convert to base64 for playback and database storage
+        return base64.b64encode(fp.read()).decode()
     except Exception as e:
-        st.error(f"❌ Text-to-speech error: {str(e)}")
-        return None, None
-
-def save_audio_to_firebase(user_email: str, message_id: str, audio_bytes: bytes, message_type: str):
-    """Save audio to Firebase Storage"""
-    if db:
-        try:
-            # Create a storage bucket reference
-            bucket = firebase_admin.storage.bucket()
-            
-            # Create filename
-            filename = f"audio/{user_email}/{message_type}_{message_id}_{datetime.now(IST).strftime('%Y%m%d_%H%M%S')}.mp3"
-            
-            # Upload to Firebase Storage
-            blob = bucket.blob(filename)
-            blob.upload_from_string(audio_bytes, content_type='audio/mp3')
-            
-            # Make public and get URL
-            blob.make_public()
-            audio_url = blob.public_url
-            
-            # Save reference in Firestore
-            audio_ref = db.collection('audio_messages').add({
-                'user_email': user_email,
-                'message_id': message_id,
-                'audio_url': audio_url,
-                'filename': filename,
-                'message_type': message_type,
-                'timestamp': datetime.now(IST)
-            })
-            
-            return audio_url
-        except Exception as e:
-            st.warning(f"⚠️ Could not save audio: {str(e)}")
-            return None
-    return None
-
-def get_audio_from_firebase(user_email: str, message_id: str):
-    """Retrieve audio URL from Firebase"""
-    if db:
-        try:
-            audio_docs = db.collection('audio_messages')\
-                          .where('user_email', '==', user_email)\
-                          .where('message_id', '==', message_id)\
-                          .stream()
-            
-            for doc in audio_docs:
-                return doc.to_dict().get('audio_url')
-        except:
-            pass
-    return None
-
-def create_speaker_button(message_id, text):
-    """Create a speaker button for text-to-speech"""
-    button_html = f"""
-        <span class="speaker-btn" onclick="playAudio('{message_id}')" title="Listen to response">
-            🔊
-        </span>
-        <script>
-        function playAudio(id) {{
-            var msg = document.getElementById(id).innerText;
-            // This will trigger the Python text-to-speech function
-            window.parent.postMessage({{type: 'speak', text: msg}}, '*');
-        }}
-        </script>
-    """
-    return button_html
+        st.error(f"TTS Error: {str(e)}")
+        return None
 
 # ----------------------
 # Firebase Setup
@@ -408,19 +309,7 @@ def init_firebase():
                     cred_dict = st.secrets['FIREBASE_CONFIG']
                 
                 cred = credentials.Certificate(cred_dict)
-                
-                # Initialize with storage bucket
-                # REPLACE with your actual project ID
-                your_project_id = "your-project-id"  # CHANGE THIS
-                
-                firebase_admin.initialize_app(cred, {
-                    'storageBucket': f'{your_project_id}.appspot.com'
-                })
-                
-                # Initialize storage
-                from firebase_admin import storage
-                bucket = storage.bucket()
-                
+                firebase_admin.initialize_app(cred)
             else:
                 st.warning("⚠️ Firebase configuration not found. Running in local mode.")
                 return None
@@ -461,8 +350,7 @@ def sign_up(email: str, password: str) -> tuple:
             'preferences': {
                 'model': 'base',
                 'theme': 'light',
-                'notifications': True,
-                'voice_output': True
+                'notifications': True
             }
         }
         
@@ -499,8 +387,8 @@ def sign_in(email: str, password: str) -> tuple:
 # ----------------------
 # Database Functions
 # ----------------------
-def save_message(user_email: str, role: str, content: str, model_used: str = None, audio_url: str = None):
-    """Save message to Firebase with metadata"""
+def save_message(user_email: str, role: str, content: str, model_used: str = None, audio_base64: str = None):
+    """Save message to Firebase with metadata and optional audio data"""
     if db:
         try:
             message_data = {
@@ -510,11 +398,8 @@ def save_message(user_email: str, role: str, content: str, model_used: str = Non
                 'timestamp': datetime.now(IST),
                 'model_used': model_used,
                 'tokens': len(content.split()),  # Approximate token count
-                'has_audio': audio_url is not None
+                'audio_base64': audio_base64  # Store Base64 audio directly in DB
             }
-            
-            if audio_url:
-                message_data['audio_url'] = audio_url
             
             db.collection('messages').add(message_data)
             
@@ -552,8 +437,7 @@ def get_chat_history(user_email: str, limit: int = 50) -> List[Dict]:
                 'content': data['content'],
                 'timestamp': data['timestamp'].astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if data.get('timestamp') else None,
                 'model_used': data.get('model_used', 'unknown'),
-                'has_audio': data.get('has_audio', False),
-                'audio_url': data.get('audio_url', None)
+                'audio_base64': data.get('audio_base64', None) # Fetch audio history
             })
         
         # Return in chronological order
@@ -665,9 +549,7 @@ def search_conversations(user_email: str, query: str) -> List[Dict]:
                     'role': data['role'],
                     'content': data['content'],
                     'timestamp': data['timestamp'].astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if data.get('timestamp') else None,
-                    'model_used': data.get('model_used', 'unknown'),
-                    'has_audio': data.get('has_audio', False),
-                    'audio_url': data.get('audio_url', None)
+                    'model_used': data.get('model_used', 'unknown')
                 })
         
         return results[:20]  # Return top 20 matches
@@ -842,7 +724,9 @@ def export_chat_history(messages: List[Dict], format: str = "txt"):
         return content
     
     elif format == "json":
-        return json.dumps(messages, indent=2, default=str)
+        # Remove audio base64 from json export to keep it lightweight
+        export_msgs = [{k:v for k,v in m.items() if k != 'audio_base64'} for m in messages]
+        return json.dumps(export_msgs, indent=2, default=str)
     
     elif format == "md":
         content = "# Chat Export\n\n"
@@ -1013,10 +897,6 @@ def show_settings_modal():
                 max_value=24,
                 value=16
             )
-            
-            st.subheader("🎤 Voice Settings")
-            voice_output = st.checkbox("Enable Voice Output", value=True)
-            auto_play = st.checkbox("Auto-play responses", value=False)
         
         with col2:
             st.subheader("🤖 AI Settings")
@@ -1043,16 +923,12 @@ def show_settings_modal():
                 'theme': theme.lower(),
                 'font_size': font_size,
                 'temperature': temperature,
-                'max_tokens': max_tokens,
-                'voice_output': voice_output,
-                'auto_play': auto_play
+                'max_tokens': max_tokens
             }
             
             if update_user_preferences(st.session_state.user_email, preferences):
                 st.success("✅ Settings saved!")
                 st.session_state.preferences = preferences
-                st.session_state.voice_output = voice_output
-                st.session_state.auto_play = auto_play
             else:
                 st.error("❌ Failed to save settings")
 
@@ -1087,8 +963,6 @@ def show_chat_interface():
     if 'preferences' not in st.session_state:
         stats = get_user_stats(st.session_state.user_email)
         st.session_state.preferences = stats.get('preferences', {})
-        st.session_state.voice_output = st.session_state.preferences.get('voice_output', True)
-        st.session_state.auto_play = st.session_state.preferences.get('auto_play', False)
     
     # Sidebar
     with st.sidebar:
@@ -1149,21 +1023,6 @@ def show_chat_interface():
         )
         
         st.session_state.current_persona = persona
-        
-        st.divider()
-        
-        # Voice Control
-        st.subheader("🎤 Voice Control")
-        voice_enabled = st.checkbox("Enable Voice Input", value=True)
-        st.session_state.voice_enabled = voice_enabled
-        
-        # Voice button in sidebar
-        if voice_enabled:
-            if st.button("🎙️ Voice Input", use_container_width=True, type="primary"):
-                text, audio = record_audio()
-                if text:
-                    st.session_state.voice_input = text
-                    st.rerun()
         
         st.divider()
         
@@ -1277,8 +1136,7 @@ def show_chat_interface():
     
     # Status indicators
     model_status = "🟢 Base Model (GPT-3.5)" if st.session_state.current_model == "base" else "🟢 Pro Model (Llama-3-70B)"
-    voice_status = "🔊 Voice On" if st.session_state.get('voice_output', True) else "🔇 Voice Off"
-    st.caption(f"{model_status} | Persona: {persona.capitalize()} | {voice_status}")
+    st.caption(f"{model_status} | Persona: {persona.capitalize()}")
     
     # Settings
     show_settings_modal()
@@ -1297,64 +1155,52 @@ def show_chat_interface():
             with col4:
                 st.metric("Sessions", stats['total_sessions'])
     
-    # Display chat messages
-    for idx, msg in enumerate(st.session_state.messages):
-        message_id = f"msg_{idx}"
+    # Display chat messages with Audio Playback
+    for msg in st.session_state.messages:
         with st.chat_message(
             msg['role'],
             avatar="🧑" if msg['role'] == 'user' else "✨"
         ):
-            col1, col2 = st.columns([20, 1])
-            with col1:
-                st.markdown(msg['content'])
-            with col2:
-                if msg['role'] == 'assistant' and st.session_state.get('voice_output', True):
-                    if st.button("🔊", key=f"speak_{idx}", help="Listen to response"):
-                        audio_html, audio_bytes = text_to_speech_female(msg['content'])
-                        if audio_html:
-                            st.components.v1.html(audio_html, height=0)
-                            # Save audio to Firebase
-                            if db:
-                                save_audio_to_firebase(
-                                    st.session_state.user_email,
-                                    message_id,
-                                    audio_bytes,
-                                    'assistant_response'
-                                )
+            st.markdown(msg['content'])
+            
+            # Show audio player if audio base64 is present
+            if msg.get('audio_base64'):
+                audio_format = "audio/mp3" if msg['role'] == 'assistant' else "audio/wav"
+                st.audio(base64.b64decode(msg['audio_base64']), format=audio_format)
             
             # Show metadata if available
             if msg.get('timestamp'):
                 st.caption(f"🕒 {msg['timestamp']} | 🤖 {msg.get('model_used', 'unknown')}")
+
+    # Spacer before inputs
+    st.write("")
+
+    # Handling Input Forms (Text or Audio)
+    audio_prompt = st.audio_input("🎤 Record Voice Message")
+    text_prompt = st.chat_input("Type your message here...")
     
-    # Chat input area with voice button
-    col1, col2 = st.columns([20, 1])
+    final_prompt = None
+    user_audio_b64 = None
+
+    if text_prompt:
+        final_prompt = text_prompt
+    elif audio_prompt:
+        # Check if we've already processed this audio payload to prevent re-triggering loops
+        audio_bytes = audio_prompt.getvalue()
+        audio_hash = hashlib.md5(audio_bytes).hexdigest()
+        
+        if st.session_state.get('last_processed_audio') != audio_hash:
+            st.session_state['last_processed_audio'] = audio_hash
+            
+            with st.spinner("🎙️ Transcribing voice..."):
+                transcribed = speech_to_text(audio_bytes)
+                if "Audio recognition failed" not in transcribed:
+                    final_prompt = transcribed
+                    user_audio_b64 = base64.b64encode(audio_bytes).decode()
+                else:
+                    st.error(transcribed)
     
-    with col1:
-        # Check for voice input from sidebar
-        if 'voice_input' in st.session_state and st.session_state.voice_input:
-            prompt = st.session_state.voice_input
-            st.session_state.voice_input = None
-        else:
-            prompt = st.chat_input("Type your message here...")
-    
-    with col2:
-        if st.session_state.get('voice_enabled', True):
-            if st.button("🎤", key="voice_input_main", help="Click to speak"):
-                text, audio = record_audio()
-                if text:
-                    prompt = text
-                    # Save user audio to Firebase
-                    if db and audio:
-                        message_id = f"user_{datetime.now(IST).timestamp()}"
-                        save_audio_to_firebase(
-                            st.session_state.user_email,
-                            message_id,
-                            audio.get_wav_data(),
-                            'user_input'
-                        )
-                    st.rerun()
-    
-    if prompt:
+    if final_prompt:
         # Get current model
         current_model = st.session_state.pro_model if st.session_state.current_model == "pro" else st.session_state.base_model
         
@@ -1364,20 +1210,24 @@ def show_chat_interface():
         
         # Display user message
         with st.chat_message("user", avatar="🧑"):
-            st.markdown(prompt)
+            st.markdown(final_prompt)
+            if user_audio_b64:
+                st.audio(base64.b64decode(user_audio_b64), format="audio/wav")
         
         # Add to session
         st.session_state.messages.append({
             "role": "user",
-            "content": prompt
+            "content": final_prompt,
+            "audio_base64": user_audio_b64
         })
         
-        # Save to database
+        # Save to database (Includes base64 audio string to store in Firestore)
         save_message(
             st.session_state.user_email,
             "user",
-            prompt,
-            "gpt-3.5" if st.session_state.current_model == "base" else "llama-3-70b"
+            final_prompt,
+            "gpt-3.5" if st.session_state.current_model == "base" else "llama-3-70b",
+            audio_base64=user_audio_b64
         )
         
         # Prepare messages for model
@@ -1396,12 +1246,13 @@ def show_chat_interface():
                 messages_for_model.append(AIMessage(content=msg['content']))
         
         # Add current prompt
-        messages_for_model.append(HumanMessage(content=prompt))
+        messages_for_model.append(HumanMessage(content=final_prompt))
         
         # Generate response with streaming
         with st.chat_message("assistant", avatar="✨"):
             message_placeholder = st.empty()
             full_response = ""
+            assistant_audio_b64 = None
             
             try:
                 # Show typing indicator
@@ -1412,37 +1263,32 @@ def show_chat_interface():
                             full_response += chunk.content
                             message_placeholder.markdown(full_response + "▌")
                     
-                    # Final response
+                    # Final text response
                     message_placeholder.markdown(full_response)
                     
-                    # Auto-play voice if enabled
-                    if st.session_state.get('auto_play', False) and st.session_state.get('voice_output', True):
-                        audio_html, audio_bytes = text_to_speech_female(full_response)
-                        if audio_html:
-                            st.components.v1.html(audio_html, height=0)
-                            # Save assistant audio to Firebase
-                            if db:
-                                save_audio_to_firebase(
-                                    st.session_state.user_email,
-                                    f"assistant_{datetime.now(IST).timestamp()}",
-                                    audio_bytes,
-                                    'assistant_response'
-                                )
-                    
+                    # Generate Audio Response (Female AI Voice)
+                    with st.spinner("🔊 Generating voice..."):
+                        assistant_audio_b64 = text_to_speech(full_response)
+                        if assistant_audio_b64:
+                            # Auto-play the AI voice response
+                            st.audio(base64.b64decode(assistant_audio_b64), format="audio/mp3", autoplay=True)
+
                     # Add to session
                     st.session_state.messages.append({
                         "role": "assistant",
                         "content": full_response,
                         "timestamp": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
-                        "model_used": "gpt-3.5" if st.session_state.current_model == "base" else "llama-3-70b"
+                        "model_used": "gpt-3.5" if st.session_state.current_model == "base" else "llama-3-70b",
+                        "audio_base64": assistant_audio_b64
                     })
                     
-                    # Save to database
+                    # Save to database (Includes base64 audio string to store in Firestore)
                     save_message(
                         st.session_state.user_email,
                         "assistant",
                         full_response,
-                        "gpt-3.5" if st.session_state.current_model == "base" else "llama-3-70b"
+                        "gpt-3.5" if st.session_state.current_model == "base" else "llama-3-70b",
+                        audio_base64=assistant_audio_b64
                     )
                     
             except Exception as e:
@@ -1476,14 +1322,14 @@ def show_chat_interface():
             <div style='display: flex; align-items: center; gap: 10px; 
                         justify-content: center; margin-top: 30px;'>
                 <img src="{gif_url}" style="width: 30px; height: 30px;">
-                <p style='color: #666;'>DeckChat Pro - Powered by Advanced AI with Voice</p>
+                <p style='color: #666;'>DeckChat Pro - Powered by Advanced AI</p>
                 <img src="{gif_url}" style="width: 30px; height: 30px;">
             </div>
             """,
             unsafe_allow_html=True
         )
     else:
-        st.caption("✨ DeckChat Pro - Your Intelligent AI Companion with Voice")
+        st.caption("✨ DeckChat Pro - Your Intelligent AI Companion")
 
 # ----------------------
 # Main App
