@@ -9,3 +9,4 @@ pydantic
 pydantic-core
 langchain-classic
 langchain-groq
+pytz
