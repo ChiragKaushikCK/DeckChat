@@ -32,7 +32,6 @@ from gtts import gTTS
 import io
 import base64
 import tempfile
-from playsound import playsound
 
 # ----------------------
 # Page Configuration
