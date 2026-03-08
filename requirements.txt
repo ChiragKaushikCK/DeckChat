@@ -7,8 +7,6 @@ firebase-admin
 pytz
 SpeechRecognition
 gTTS
-playsound
-pyaudio
 pandas
 requests
 pydantic
