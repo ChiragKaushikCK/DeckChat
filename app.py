@@ -301,10 +301,10 @@ def sign_up(email: str, password: str) -> tuple:
         user_data = {
             'email': email,
             'password_hash': hash_password(password),
-            'created_at': datetime.now(IST)(),
+            'created_at': datetime.now(IST),
             'total_messages': 0,
             'total_sessions': 0,
-            'last_active': datetime.now(IST)(),
+            'last_active': datetime.now(IST),
             'preferences': {
                 'model': 'base',
                 'theme': 'light',
@@ -332,7 +332,7 @@ def sign_in(email: str, password: str) -> tuple:
             # Update last active
             user_ref = users_ref.document(docs[0].id)
             user_ref.update({
-                'last_active': datetime.now(IST)(),
+                'last_active': datetime.now(IST),
                 'total_sessions': firestore.Increment(1)
             })
             return True, "Login successful!"
@@ -353,7 +353,7 @@ def save_message(user_email: str, role: str, content: str, model_used: str = Non
                 'user_email': user_email,
                 'role': role,
                 'content': content,
-                'timestamp': datetime.now(IST)(),
+                'timestamp': datetime.now(IST),
                 'model_used': model_used,
                 'tokens': len(content.split())  # Approximate token count
             }
@@ -367,7 +367,7 @@ def save_message(user_email: str, role: str, content: str, model_used: str = Non
                 user_ref = users_ref.document(user_docs[0].id)
                 user_ref.update({
                     'total_messages': firestore.Increment(1),
-                    'last_active': datetime.now(IST)()
+                    'last_active': datetime.now(IST)
                 })
                     
         except Exception as e:
@@ -423,7 +423,7 @@ def get_user_stats(user_email: str) -> Dict:
             data = user_docs[0].to_dict()
             
             # Get message count for today
-            today_start = datetime.now(IST)().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_start = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
             today_messages = list(db.collection('messages')
                                 .where('user_email', '==', user_email)
                                 .where('timestamp', '>=', today_start)
@@ -435,8 +435,8 @@ def get_user_stats(user_email: str) -> Dict:
             return {
                 'total_messages': total_messages,
                 'total_sessions': total_sessions,
-                'created_at': data.get('created_at', datetime.now(IST)()),
-                'last_active': data.get('last_active', datetime.now(IST)()),
+                'created_at': data.get('created_at', datetime.now(IST)),
+                'last_active': data.get('last_active', datetime.now(IST)),
                 'today_messages': len(today_messages),
                 'avg_messages_per_session': round(total_messages / max(total_sessions, 1), 1),
                 'preferences': data.get('preferences', {})
@@ -448,8 +448,8 @@ def get_user_stats(user_email: str) -> Dict:
     return {
         'total_messages': 0,
         'total_sessions': 0,
-        'created_at': datetime.now(IST)(),
-        'last_active': datetime.now(IST)(),
+        'created_at': datetime.now(IST),
+        'last_active': datetime.now(IST),
         'today_messages': 0,
         'avg_messages_per_session': 0,
         'preferences': {}
@@ -649,7 +649,7 @@ def load_gif_base64(gif_path="neon_star_animated.gif"):
 def format_timestamp(timestamp):
     """Format timestamp for display"""
     if isinstance(timestamp, datetime):
-        now = datetime.now(IST)()
+        now = datetime.now(IST)
         diff = now - timestamp
         
         if diff.days == 0:
@@ -1053,6 +1053,7 @@ def show_chat_interface():
         st.markdown("""
         <div style='text-align: center; color: #666; font-size: 12px; padding: 10px;'>
             <p>Made with ❤️ by DeckChat Team</p>
+            <p>E-Mail us for feedback</p>
             <p>📧 theconsciouschirag@gmail.com</p>
             <p>v2.0.0</p>
         </div>
@@ -1188,7 +1189,7 @@ def show_chat_interface():
                     st.session_state.messages.append({
                         "role": "assistant",
                         "content": full_response,
-                        "timestamp": datetime.now(IST)().strftime("%Y-%m-%d %H:%M:%S"),
+                        "timestamp": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
                         "model_used": "gpt-3.5" if st.session_state.current_model == "base" else "llama-3-70b"
                     })
                     
@@ -1208,7 +1209,7 @@ def show_chat_interface():
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": error_msg,
-                    "timestamp": datetime.now(IST)().strftime("%Y-%m-%d %H:%M:%S"),
+                    "timestamp": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
                     "model_used": "error"
                 })
         
