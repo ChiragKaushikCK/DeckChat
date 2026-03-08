@@ -409,9 +409,19 @@ def init_firebase():
                     cred_dict = st.secrets['FIREBASE_CONFIG']
                 
                 cred = credentials.Certificate(cred_dict)
+                
+                # Initialize with storage bucket
+                # REPLACE with your actual project ID
+                your_project_id = "your-project-id"  # CHANGE THIS
+                
                 firebase_admin.initialize_app(cred, {
-                    'storageBucket': 'your-project-id.appspot.com'  # Replace with your bucket
+                    'storageBucket': f'{your_project_id}.appspot.com'
                 })
+                
+                # Initialize storage
+                from firebase_admin import storage
+                bucket = storage.bucket()
+                
             else:
                 st.warning("⚠️ Firebase configuration not found. Running in local mode.")
                 return None
