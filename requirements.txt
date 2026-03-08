@@ -7,5 +7,4 @@ firebase-admin
 requests
 pydantic
 pydantic-core
-langchain-classic
 langchain-qroq
