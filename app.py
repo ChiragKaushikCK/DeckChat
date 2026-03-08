@@ -14,8 +14,8 @@ import pandas as pd
 # LangChain imports
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_openai import ChatOpenAI
-from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
-from langchain.callbacks.base import BaseCallbackHandler
+from langchain_classic.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+from langchain_classic.callbacks.base import BaseCallbackHandler
 
 # Firebase
 import firebase_admin
